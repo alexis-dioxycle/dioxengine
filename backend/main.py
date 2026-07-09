@@ -642,16 +642,23 @@ def seed_example(user: User = Depends(get_current_user), db: Session = Depends(g
 
 # ============ MCP OAuth endpoints ============
 
+def _public_base_url(request: Request) -> str:
+    # Behind Render's proxy request.base_url is http://; APP_URL is the truth.
+    if APP_URL and APP_URL.startswith("http"):
+        return APP_URL.rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
 @app.get("/.well-known/oauth-protected-resource")
 def oauth_protected_resource(request: Request):
-    base_url = str(request.base_url).rstrip("/")
+    base_url = _public_base_url(request)
     return {"resource": f"{base_url}/mcp", "authorization_servers": [base_url],
             "bearer_methods_supported": ["header"]}
 
 
 @app.get("/.well-known/oauth-authorization-server")
 def oauth_metadata(request: Request):
-    base_url = str(request.base_url).rstrip("/")
+    base_url = _public_base_url(request)
     return {
         "issuer": base_url,
         "authorization_endpoint": f"{base_url}/authorize",
