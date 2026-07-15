@@ -83,15 +83,53 @@ E2E check against real Postgres (validates the migration like the portal
 will): `docker run postgres:16`, apply `001_initial.sql`, boot with
 DATABASE_URL, run the lifecycle. See git log for the exact commands used.
 
-## Packaging
+## The iteration loop (how changes ship)
 
-```bash
-npm run build   # sanity-check the frontend compiles
-cd . && zip -r ../dioxengine.zip . \
-  -x '*.DS_Store' 'node_modules/*' 'backend/venv/*' 'backend/data/*' \
-     'frontend/dist/*' 'package.json' 'package-lock.json' 'run.sh' \
-     '.git/*' '.gitignore' 'CLAUDE.md' 'backend/.env' '*/__pycache__/*'
-```
+Three layers, three cadences:
 
-The zip (manifest.yaml at root) is what gets uploaded on the portal's
-**New app** page.
+1. **Content/structure** (documents, templates, projects, comments) — no
+   deploy ever. Through the web UI or the 23 MCP tools (Claude can build
+   whole workflows: create_template → update_template_graph →
+   publish_template → create_project).
+2. **App code** (this repo) — the `.zip` loop:
+   ```bash
+   npm run build          # sanity-check the frontend compiles
+   rm -rf frontend/dist backend/data
+   zip -qr ../dioxengine.zip . \
+     -x '*.DS_Store' 'node_modules/*' 'backend/venv/*' 'backend/data/*' \
+        'frontend/dist/*' 'package.json' 'package-lock.json' 'run.sh' \
+        '.git/*' '.gitignore' 'CLAUDE.md' 'backend/.env' '*/__pycache__/*'
+   ```
+   Alexis uploads `~/Documents/DioXengine/dioxengine.zip` on the app's page
+   at apps.dioxycle.com → AI review → deploy. New migrations
+   (`backend/migrations/00N_*.sql`, append-only) are applied automatically
+   before the new container starts. Also `git push origin main` +
+   `git push team main:dioxengine-render` (mirror for Bastien).
+3. **Portal changes** (`~/Documents/Dioxycle/dioxycle-apps`: review rules,
+   /_mcp route, dependency panels, docker-compose env passthrough) — commit,
+   push, then Alexis runs `git pull` + `deploy.sh` on the apps server. Env
+   vars need BOTH the server `.env` (`~/deployments/dioxycle-apps/
+   environments/.env`) and an entry in `docker-compose.yaml`.
+
+MCP prod endpoint: `https://apps.dioxycle.com/_mcp/dioxengine`, Bearer =
+the app's MCP_API_KEY portal secret, acting user via `X-Dioxengine-User`.
+Configured in Alexis's `~/.claude.json` for this project dir. The pip panel
+(base/requirements.txt) now includes mcp/openpyxl/python-docx.
+
+## Status (2026-07-15 evening) & next steps
+
+- LIVE: app + MCP chain end-to-end; prod project "BOS 5000F2PBOS" (id 2)
+  carries the real 5000F2PBOS data (26 equipment rows, datasheet register,
+  HEXONIC + Alfa Laval offers, factual comparison, 2 open Claude comments).
+- PENDING: the version with docx/xlsx exports, live PFD diagram,
+  attachments, comment anchoring, graph template editor is packaged but
+  blocked by a review false positive (fixed in dioxycle-apps — needs portal
+  redeploy) → then re-upload the zip.
+- THEN (one MCP pass): publish W1 template v2 (streams section), recreate
+  the project with data + streams, attach reference PDFs.
+- PARALLEL: SharePoint Entra registration (Sites.Selected application-only,
+  Graph Explorer grant; no redirect URI) — admin todo sent; target site TBD
+  with Bastien.
+- NEXT: per-type Dioxycle Word templates (port April's narrative_to_docx),
+  workflow-2 generation in anger (narrative → CLD register + CEM via
+  get_upstream_content), demo to Raphaël.
