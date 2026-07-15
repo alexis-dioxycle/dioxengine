@@ -12,6 +12,7 @@ the app never authenticates anyone. Schema comes from backend/migrations/
   static SPA (built frontend) at /
 """
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -20,6 +21,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from starlette.routing import Route as StarletteRoute
 
 from database import IS_LOCAL_DEV, Base, engine, get_db
 from dioxycle_auth import DioxycleUser, current_user
@@ -30,6 +32,7 @@ from models import (
 )
 import doc_service as svc
 import seed
+from mcp_server import MCPAuthMiddleware, mcp
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -40,7 +43,23 @@ if IS_LOCAL_DEV:
     Path("./data").mkdir(exist_ok=True)
     Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="DioXengine")
+# ---- MCP wiring (reached via the portal's /_mcp/dioxengine pass-through;
+# Bearer-token auth inside MCPAuthMiddleware — see mcp_server.py) ----
+_mcp_starlette = mcp.streamable_http_app()
+_mcp_asgi_handler = _mcp_starlette.routes[0].endpoint
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with mcp.session_manager.run():
+        logger.info("MCP session manager started")
+        yield
+
+
+app = FastAPI(title="DioXengine", lifespan=lifespan)
+app.router.routes.insert(
+    0, StarletteRoute("/mcp", endpoint=MCPAuthMiddleware(_mcp_asgi_handler),
+                      methods=["GET", "POST", "DELETE"]))
 
 
 def track_user(user: DioxycleUser = Depends(current_user),

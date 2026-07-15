@@ -3,3 +3,5 @@ uvicorn>=0.32.0
 sqlalchemy>=2.0.36
 pydantic>=2.10.0
 psycopg2-binary>=2.9.9
+# Off-panel (installed at build time); candidate for the shared panel.
+mcp>=1.6.0

@@ -8,6 +8,7 @@ database: true
 resources:
   memory_mb: 512
   cpu: 1.0
-secrets: []
+secrets:
+  - MCP_API_KEY   # Bearer token for the /mcp endpoint (Claude Code via /_mcp/dioxengine)
 allowed_egress: []
 visibility: team
