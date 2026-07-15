@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 /* Living process diagram: any table section with from/to columns renders as a
-   flow graph straight from its rows — edit the table, the drawing follows.
+   flow graph straight from its rows - edit the table, the drawing follows.
    Built for PFD stream registers but generic (cable lists, I/O routing…).
 
    Deliberately uses literal colors (not CSS vars) so the exported SVG is
@@ -136,7 +136,7 @@ export default function FlowDiagram({ section, rows }) {
       .map((r, i) => ({
         from: String(r[fromKey] ?? '').trim(), to: String(r[toKey] ?? '').trim(),
         label: idKey ? String(r[idKey] ?? '').trim() : '',
-        detail: cols.map(c => `${c.label}: ${String(r[c.key] ?? '') || '—'}`).join('\n'),
+        detail: cols.map(c => `${c.label}: ${String(r[c.key] ?? '') || '-'}`).join('\n'),
         row: i,
       }))
       .filter(l => l.from && l.to && l.from !== l.to);

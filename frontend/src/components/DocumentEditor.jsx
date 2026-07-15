@@ -97,7 +97,7 @@ export default function DocumentEditor({ id, me }) {
       setAttachments(await api.get(`api/documents/${id}/attachments`));
       if (kind === 'deliverable') setPreviewId(a.id);
       setToastTimed(kind === 'deliverable'
-        ? `${a.filename} is now the deliverable — this file IS the document`
+        ? `${a.filename} is now the deliverable - this file IS the document`
         : `${a.filename} is a reference file again`);
     } catch (e) { setErr(e.message); }
   }
@@ -220,7 +220,7 @@ export default function DocumentEditor({ id, me }) {
             <option value="">Current{status ? ` (rev ${doc.latest_version_number} ${status})` : ''}</option>
             {doc.versions.filter(v => v.version_number !== doc.latest_version_number).map(v => (
               <option key={v.version_number} value={v.version_number}>
-                rev {v.version_number} — {v.status}
+                rev {v.version_number} - {v.status}
               </option>
             ))}
           </select>
@@ -300,7 +300,7 @@ export default function DocumentEditor({ id, me }) {
                 <a onClick={() => setAttachmentKind(a, a.kind === 'deliverable' ? 'reference' : 'deliverable')}
                    style={{ cursor: 'pointer' }}
                    title={a.kind === 'deliverable'
-                     ? 'Unmark — back to a simple reference file'
+                     ? 'Unmark - back to a simple reference file'
                      : 'Mark as the deliverable: this file IS the document (e.g. an uploaded P&ID)'}>
                   {a.kind === 'deliverable' ? '★' : '☆'}
                 </a>
@@ -400,7 +400,7 @@ function SectionBlock({ section, value, readOnly, flash, hl, openComments, onCha
   );
 }
 
-/* how this document is produced — the skill defined on the template node:
+/* how this document is produced - the skill defined on the template node:
    which upstream documents to pull from, what to take from each. Read-only
    here; edited in the template editor (or by Claude via MCP). */
 function SkillPanel({ skill, tools = [] }) {
@@ -408,7 +408,7 @@ function SkillPanel({ skill, tools = [] }) {
   return (
     <div style={{ margin: '10px 0 2px' }}>
       <button className="btn ghost sm" onClick={() => setOpen(v => !v)}>
-        {open ? '\u25be' : '\u25b8'} Skill <span className="muted">&mdash; how this document is produced</span>
+        {open ? '\u25be' : '\u25b8'} Skill <span className="muted">- how this document is produced</span>
         {tools.length > 0 && <span className="muted"> &middot; {tools.length} tool{tools.length > 1 ? 's' : ''}</span>}
       </button>
       {open && (
@@ -443,7 +443,7 @@ function ProseArea({ value, readOnly, onChange }) {
   }, [value]);
   return (
     <textarea ref={ref} className="prose-edit" value={value} readOnly={readOnly}
-              placeholder={readOnly ? '—' : 'Write here…'}
+              placeholder={readOnly ? '-' : 'Write here…'}
               onChange={e => onChange(e.target.value)} rows={1} />
   );
 }
@@ -470,6 +470,7 @@ function GridTable({ section, rows, readOnly, hlRow = -1, onChange, onCommentRow
 
   return (
     <>
+      <div className="grid-scroll">
       <table className="grid-table">
         <thead>
           <tr>{cols.map(c => <th key={c.key}>{c.label}</th>)}<th style={{ width: 76 }} /></tr>
@@ -503,6 +504,7 @@ function GridTable({ section, rows, readOnly, hlRow = -1, onChange, onCommentRow
           ))}
         </tbody>
       </table>
+      </div>
       {!readOnly && <button className="add-row" onClick={addRow}>+ Add row</button>}
     </>
   );
@@ -559,7 +561,7 @@ function CommentModal({ target, sections, onClose, onSubmit }) {
   return (
     <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal">
-        <h2>Comment — {title}{target.row !== null ? ` · row ${target.row + 1}` : ''}</h2>
+        <h2>Comment - {title}{target.row !== null ? ` · row ${target.row + 1}` : ''}</h2>
         <textarea className="input" rows={4} autoFocus value={body}
                   placeholder="Flag missing info, question an assumption…"
                   onChange={e => setBody(e.target.value)} />

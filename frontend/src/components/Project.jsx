@@ -32,7 +32,7 @@ export default function ProjectPage({ id, me }) {
           <div className="crumb small"><a href="#/">Projects</a> / <b>{p.name}</b></div>
           <h1 className="title" style={{ marginTop: 6 }}>{p.name}</h1>
           <p className="soft small" style={{ margin: '4px 0 0' }}>
-            {p.template_name} · v{p.template_version}{p.description ? ` — ${p.description}` : ''}
+            {p.template_name} · v{p.template_version}{p.description ? ` - ${p.description}` : ''}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>

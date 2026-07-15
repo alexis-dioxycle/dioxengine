@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../utils/api';
 
-/* Template editor: define the workflow DAG — document types (with their
+/* Template editor: define the workflow DAG - document types (with their
    section schemas) and the edges between them. Draft versions are editable;
    published versions are frozen (create a new version to change them). */
 
@@ -75,7 +75,7 @@ export default function TemplateEditor({ tvid, me }) {
 
   async function publish() {
     if (dirty) await save();
-    if (!window.confirm('Publish this version? Published versions are frozen — later changes need a new version.')) return;
+    if (!window.confirm('Publish this version? Published versions are frozen - later changes need a new version.')) return;
     setBusy(true); setErr('');
     try { await api.post(`api/template-versions/${tvid}/publish`); load(); }
     catch (e) { setErr(e.message); }
@@ -141,7 +141,7 @@ export default function TemplateEditor({ tvid, me }) {
                  onClick={() => setSel(i)}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: i === sel ? 600 : 450, fontSize: 13.5 }}>{n.name || <i className="muted">unnamed</i>}</div>
-                <div className="doc-no">{n.node_key || '—'}</div>
+                <div className="doc-no">{n.node_key || '-'}</div>
               </div>
               {editable && <button className="icon-btn" onClick={e => { e.stopPropagation(); removeNode(i); }}>✕</button>}
             </div>
@@ -161,7 +161,7 @@ export default function TemplateEditor({ tvid, me }) {
                       onErr={setErr} onMsg={m => { setMsg(m); setTimeout(() => setMsg(''), 2500); }} />
           ) : (
             <div className="card" style={{ padding: 30, textAlign: 'center' }} >
-              <span className="soft">No document types yet — add one on the left.</span>
+              <span className="soft">No document types yet - add one on the left.</span>
             </div>
           )}
         </div>
@@ -238,7 +238,7 @@ function TemplateGraph({ nodes, edges, sel, editable, onSelect, onEdges, onAddNo
             <button className="btn sm" onClick={() => setLinkFrom('')}>🔗 Add link</button>
           ) : (
             <span className="small" style={{ color: 'var(--accent)', display: 'flex', gap: 8, alignItems: 'center' }}>
-              {linkFrom === '' ? 'Click the SOURCE document…' : <>From <b>{nameOf[linkFrom]}</b> — click the TARGET…</>}
+              {linkFrom === '' ? 'Click the SOURCE document…' : <>From <b>{nameOf[linkFrom]}</b> - click the TARGET…</>}
               <button className="btn ghost sm" onClick={() => setLinkFrom(null)}>cancel</button>
             </span>
           )
@@ -354,7 +354,7 @@ function NodeForm({ node, editable, onChange, onSections, publishedOwner, onErr,
 
       <div style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-          <label className="lbl">Skill — how this document is produced</label>
+          <label className="lbl">Skill - how this document is produced</label>
           {publishedOwner && skillDirty && (
             <button className="btn sm" onClick={saveSkill}>Save skill</button>
           )}
@@ -369,7 +369,7 @@ function NodeForm({ node, editable, onChange, onSections, publishedOwner, onErr,
                   }} />
         {publishedOwner && (
           <div className="muted small" style={{ marginTop: 4 }}>
-            This version is published, but skills stay editable — changes apply immediately to every project on it.
+            This version is published, but skills stay editable - changes apply immediately to every project on it.
           </div>
         )}
       </div>
@@ -423,12 +423,29 @@ function NodeForm({ node, editable, onChange, onSections, publishedOwner, onErr,
 function ToolsEditor({ node, editable, publishedOwner, onChange, onErr, onMsg }) {
   const tools = node.tools || [];
   const [dirty, setDirty] = useState(false);
+  const [catalog, setCatalog] = useState(null);   // null = closed, [] = loading/empty
+  const [catErr, setCatErr] = useState('');
 
   function patch(next) {
     onChange({ tools: next });
     if (publishedOwner) setDirty(true);
   }
   function patchTool(i, p) { patch(tools.map((t, x) => (x === i ? { ...t, ...p } : t))); }
+
+  async function openCatalog() {
+    setCatErr('');
+    setCatalog([]);
+    try {
+      const r = await api.get('api/tool-catalog');
+      setCatalog(r.tools || []);
+    } catch (e) { setCatErr(e.message); }
+  }
+
+  function addFromCatalog(t) {
+    const name = tools.some(x => x.name === t.name) ? `${t.app_slug.replace(/-/g, '_')}_${t.name}` : t.name;
+    patch([...tools, { name, description: t.description, url: t.url, method: t.method, params: t.params }]);
+    setCatalog(null);
+  }
 
   async function saveTools() {
     try {
@@ -441,7 +458,7 @@ function ToolsEditor({ node, editable, publishedOwner, onChange, onErr, onMsg })
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        <label className="lbl">Tools — deterministic apps the assistant may call</label>
+        <label className="lbl">Tools - deterministic apps the assistant may call</label>
         {publishedOwner && dirty && <button className="btn sm" onClick={saveTools}>Save tools</button>}
       </div>
       {tools.map((t, i) => (
@@ -474,9 +491,40 @@ function ToolsEditor({ node, editable, publishedOwner, onChange, onErr, onMsg })
         </div>
       ))}
       {editable && (
-        <button className="add-row" onClick={() => patch([...tools, { name: '', description: '', url: '', method: 'GET', params: '' }])}>
-          + Tool
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="add-row" onClick={openCatalog}>+ From the apps catalog</button>
+          <button className="add-row" onClick={() => patch([...tools, { name: '', description: '', url: '', method: 'GET', params: '' }])}>
+            + Custom tool
+          </button>
+        </div>
+      )}
+      {catErr && <p className="small" style={{ color: 'var(--bad)', marginTop: 6 }}>{catErr}</p>}
+      {catalog !== null && !catErr && (
+        <div style={{ border: '1px solid var(--line)', borderRadius: 8, marginTop: 8, overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--line)', background: 'var(--bg)' }}>
+            <span className="doc-no">Tools exposed by Dioxycle Apps</span>
+            <span className="spacer" style={{ flex: 1 }} />
+            <button className="icon-btn" onClick={() => setCatalog(null)}>✕</button>
+          </div>
+          {catalog.length === 0 ? (
+            <div className="muted small" style={{ padding: '12px 14px' }}>
+              No tools in the catalog yet. An app exposes one by declaring it in its manifest (tools: name, description, path...).
+            </div>
+          ) : catalog.map((t, i) => (
+            <div key={i} className="rowlink" style={{ padding: '9px 14px', cursor: 'pointer' }}
+                 onClick={() => addFromCatalog(t)}
+                 title={`${t.method} ${t.url}`}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13.5 }}>
+                  <b className="mono">{t.name}</b>
+                  <span className="muted"> · {t.app_name}</span>
+                </div>
+                <div className="muted small">{t.description}{t.params ? ` · params: ${t.params}` : ''}</div>
+              </div>
+              <span className="btn ghost sm">attach</span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

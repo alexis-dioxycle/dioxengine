@@ -1,4 +1,4 @@
-// The portal injects identity upstream of the container — the frontend never
+// The portal injects identity upstream of the container - the frontend never
 // sends auth. All paths are RELATIVE ('api/...') so the same build works at /
 // (standalone) and under /_apps/dioxengine/ (portal proxy).
 

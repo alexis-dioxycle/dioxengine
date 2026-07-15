@@ -182,7 +182,34 @@ h2.subtitle { font-size: 12px; font-weight: 600; letter-spacing: .09em; text-tra
 .prose-edit:read-only { color: var(--ink-soft); }
 
 /* table sections — spreadsheet feel */
-.grid-table { width: 100%; border-collapse: collapse; margin: 2px 0 10px; }
+/* Wide tables scroll horizontally inside their own container instead of
+   crushing columns or bleeding out of the sheet. The scrollbar is forced
+   visible (macOS hides it) and a right-edge shadow hints at more columns. */
+.grid-scroll {
+  overflow-x: auto;
+  margin: 2px 0 10px;
+  background:
+    linear-gradient(to right, var(--paper) 30%, rgba(255, 255, 255, 0)),
+    linear-gradient(to left, var(--paper) 30%, rgba(255, 255, 255, 0)) 100% 0,
+    radial-gradient(farthest-side at 0 50%, rgba(28, 36, 51, .18), transparent),
+    radial-gradient(farthest-side at 100% 50%, rgba(28, 36, 51, .18), transparent) 100% 0;
+  background-repeat: no-repeat;
+  background-size: 44px 100%, 44px 100%, 14px 100%, 14px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
+.grid-scroll::-webkit-scrollbar { height: 9px; }
+.grid-scroll::-webkit-scrollbar-track { background: transparent; }
+.grid-scroll::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 5px; }
+.grid-scroll::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); }
+
+.grid-table { width: 100%; border-collapse: collapse; }
+/* real columns keep a readable width; the trailing tools column stays slim */
+.grid-table th:not(:last-child), .grid-table td:not(:last-child) { min-width: 96px; }
+/* first column (tag/item) stays visible while scrolling */
+.grid-table th:first-child, .grid-table td:first-child {
+  position: sticky; left: 0; z-index: 1; background: var(--paper);
+}
+tr.row-hl td:first-child { background: var(--warn-bg); }
 .grid-table th {
   font: 600 11px var(--font-mono); letter-spacing: .05em; text-transform: uppercase;
   color: var(--ink-soft); text-align: left;

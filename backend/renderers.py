@@ -1,10 +1,10 @@
 """Deliverable renderers and their inverses.
 
 The structured sections are the source of truth; Word/Excel files are
-RENDERED from them (render_docx / render_xlsx — used by the /export routes
+RENDERED from them (render_docx / render_xlsx - used by the /export routes
 and the SharePoint sync). Because we generate the files ourselves, we can
 also parse a round-tripped file back into section content (parse_docx /
-parse_xlsx) — that is what makes the SharePoint two-way sync possible: a
+parse_xlsx) - that is what makes the SharePoint two-way sync possible: a
 colleague edits the .xlsx in SharePoint, the sync pulls the rows back into
 the document draft. Parsing is schema-driven and best-effort: unknown
 sheets/headings/columns are ignored rather than fatal.
@@ -198,7 +198,7 @@ def render_docx(doc, head) -> bytes:
                 for i, c in enumerate(cols):
                     tr.cells[i].paragraphs[0].add_run(str(row.get(c["key"], "") or "")).font.size = Pt(8.5)
         else:
-            for para_text in (content.get(s["key"], "") or "—").split("\n"):
+            for para_text in (content.get(s["key"], "") or "-").split("\n"):
                 d.add_paragraph(para_text)
 
     buf = io.BytesIO()
@@ -235,7 +235,7 @@ def parse_docx(data: bytes, content_schema: dict) -> dict:
             body_text = "\n".join(texts)
             while body_text.endswith("\n"):
                 body_text = body_text[:-1]
-            out[current["key"]] = "" if body_text.strip() == "—" else body_text
+            out[current["key"]] = "" if body_text.strip() == "-" else body_text
 
     for el in body:
         if isinstance(el, Paragraph):

@@ -88,7 +88,7 @@ DATABASE_URL, run the lifecycle. See git log for the exact commands used.
 Three layers, three cadences:
 
 1. **Content/structure** (documents, templates, projects, comments, skills,
-   tools) — no deploy ever. Through the web UI or the 30 MCP tools (Claude
+   tools) — no deploy ever. Through the web UI or the 31 MCP tools (Claude
    can build whole workflows: create_template → update_template_graph →
    publish_template → create_project; write per-document skills/tools with
    set_document_skill / set_document_tools — allowed on published versions).

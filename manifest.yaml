@@ -14,6 +14,7 @@ secrets:
   - MS_CLIENT_ID      # Entra app registration (Sites.Selected application permission)
   - MS_CLIENT_SECRET  # Entra client secret
   - SHAREPOINT_SITE   # e.g. dioxycle.sharepoint.com:/sites/1tonperdaypilot
+  - TOOLS_API_KEY     # machine bearer for the portal's /_tools catalog + pass-through (same value as the portal env)
 allowed_egress:
   - login.microsoftonline.com   # Entra token endpoint
   - graph.microsoft.com         # Microsoft Graph (SharePoint drive)

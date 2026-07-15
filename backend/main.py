@@ -1,4 +1,4 @@
-"""DioXengine backend — Dioxycle Apps portal shape.
+"""DioXengine backend - Dioxycle Apps portal shape.
 
 Identity comes from the portal (HMAC-signed headers, see dioxycle_auth.py);
 the app never authenticates anyone. Schema comes from backend/migrations/
@@ -54,12 +54,12 @@ logger = logging.getLogger(__name__)
 
 if IS_LOCAL_DEV:
     # Local SQLite only. On the portal the schema comes exclusively from
-    # backend/migrations/ — create_all never runs there (DATABASE_URL is set).
+    # backend/migrations/ - create_all never runs there (DATABASE_URL is set).
     Path("./data").mkdir(exist_ok=True)
     Base.metadata.create_all(bind=engine)
 
 # ---- MCP wiring (reached via the portal's /_mcp/dioxengine pass-through;
-# Bearer-token auth inside MCPAuthMiddleware — see mcp_server.py) ----
+# Bearer-token auth inside MCPAuthMiddleware - see mcp_server.py) ----
 _mcp_starlette = mcp.streamable_http_app()
 _mcp_asgi_handler = _mcp_starlette.routes[0].endpoint
 
@@ -338,7 +338,7 @@ def delete_template_version(tvid: int, user: DioxycleUser = Depends(track_user),
 def delete_template(tid: int, user: DioxycleUser = Depends(track_user),
                     db: Session = Depends(get_db)):
     """Delete a whole workflow template (all versions). Refused while any
-    project instantiates one of its versions — delete those projects first."""
+    project instantiates one of its versions - delete those projects first."""
     svc.require_template_access(db, tid, user, need_owner=True)
     t = db.get(WorkflowTemplate, tid)
     version_ids = [v.id for v in t.versions]
@@ -348,7 +348,7 @@ def delete_template(tid: int, user: DioxycleUser = Depends(track_user),
     if blocking:
         names = ", ".join(p.name for p in blocking[:5])
         raise HTTPException(409, f"{len(blocking)} project(s) use this template ({names}"
-                                 + ("…" if len(blocking) > 5 else "") + ") — delete them first")
+                                 + ("…" if len(blocking) > 5 else "") + ") - delete them first")
     db.query(TemplateOwner).filter_by(template_id=tid).delete()
     db.query(TemplateUser).filter_by(template_id=tid).delete()
     db.delete(t)
@@ -714,7 +714,7 @@ def update_attachment(did: int, aid: int, body: AttachmentUpdate,
                       user: DioxycleUser = Depends(track_user),
                       db: Session = Depends(get_db)):
     """Toggle an attachment between 'reference' (supporting original) and
-    'deliverable' (this file IS the document — the PNID case)."""
+    'deliverable' (this file IS the document - the PNID case)."""
     doc = svc.get_document_or_404(db, did, user)
     a = db.get(Attachment, aid)
     if not a or a.document_id != did:
@@ -776,6 +776,17 @@ def export_docx(did: int, user: DioxycleUser = Depends(track_user),
         content=renderers.render_docx(doc, head),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": _content_disposition("attachment", fname)})
+
+
+# ============ tool catalog ============
+
+@app.get("/api/tool-catalog")
+def tool_catalog(user: DioxycleUser = Depends(track_user)):
+    """The portal's aggregated tool catalog: every deterministic endpoint the
+    Dioxycle Apps declare in their manifest `tools:` section. Backs the
+    template editor's tool picker."""
+    import app_tools
+    return {"tools": app_tools.fetch_catalog()}
 
 
 # ============ SharePoint two-way sync ============

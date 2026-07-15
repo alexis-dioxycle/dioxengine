@@ -29,7 +29,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // Identity comes from the portal — if this fails, we're not behind it.
+    // Identity comes from the portal - if this fails, we're not behind it.
     api.get('api/me').then(setMe).catch(e => setErr(e.message));
   }, []);
 

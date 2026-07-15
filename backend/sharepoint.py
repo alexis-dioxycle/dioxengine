@@ -2,13 +2,13 @@
 
 The SharePoint site is where documents LIVE for the rest of the company:
 every project gets a folder (DioXengine/<project>/) holding one file per
-document — the rendered .xlsx (any document with table sections), the
+document - the rendered .xlsx (any document with table sections), the
 rendered .docx (text-only documents), or the uploaded deliverable pushed
 as-is (the AutoCAD-P&ID case). The sync is two-way and conservative:
 
   remote changed, local untouched  -> PULL: parse the file back into a draft
                                       (skipped and reported when the head is
-                                      approved/submitted — those are locked)
+                                      approved/submitted - those are locked)
   local changed, remote untouched  -> PUSH: re-render and upload
   both changed                     -> CONFLICT: touch nothing, report it
   approved documents               -> pushed (final render), never pulled
@@ -195,7 +195,7 @@ def _safe(name: str) -> str:
 
 
 def _representation(db, doc):
-    """(kind, file_name, attachment | None) — what this document IS on the
+    """(kind, file_name, attachment | None) - what this document IS on the
     site: the deliverable file as-is, else .xlsx when there are tables,
     else .docx."""
     deliv = (db.query(Attachment).filter_by(document_id=doc.id, kind="deliverable")
@@ -253,7 +253,7 @@ def sync_document(db, doc, me, folder: str) -> dict:
         if locked:
             return {"document": name, "action": "locked",
                     "detail": f"changed on SharePoint but rev {head.version_number} is "
-                              f"{head.status} — approved documents are not pulled"}
+                              f"{head.status} - approved documents are not pulled"}
         data = _download(link.drive_item_id)
         modifier = (item.get("lastModifiedBy", {}).get("user", {}) or {}).get("email", "")
         if kind == "attachment":
@@ -275,11 +275,11 @@ def sync_document(db, doc, me, folder: str) -> dict:
         return {"document": name, "action": "pulled",
                 "detail": f"updated from {file_name}" + (f" (edited by {modifier})" if modifier else "")}
 
-    # ---- conflict: both sides moved — touch nothing
+    # ---- conflict: both sides moved - touch nothing
     if link and remote_changed and local_changed:
         return {"document": name, "action": "conflict",
                 "detail": f"{file_name} changed on SharePoint AND in the app since the "
-                          "last sync — resolve in the app, then sync again to push"}
+                          "last sync - resolve in the app, then sync again to push"}
 
     # ---- push: local moved (or never pushed)
     if local_changed:

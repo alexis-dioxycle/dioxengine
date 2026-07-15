@@ -7,7 +7,7 @@ Staleness = a document whose latest approved version was based on upstream
 revisions that have since been superseded.
 
 New here vs Phase 1: comments (anchored to a section, optionally a table row,
-resolvable — including by Claude via MCP) and an activity log that records who
+resolvable - including by Claude via MCP) and an activity log that records who
 changed what, human or assistant.
 """
 from datetime import datetime
@@ -207,7 +207,7 @@ class Attachment(Base):
     filename = Column(String, nullable=False)
     content_type = Column(String, default="application/octet-stream")
     # 'reference' (supporting original) or 'deliverable' (this file IS the
-    # document — e.g. an AutoCAD P&ID that no structured section replaces).
+    # document - e.g. an AutoCAD P&ID that no structured section replaces).
     kind = Column(String, default="reference")
     size_bytes = Column(Integer, default=0)
     data = deferred(Column(LargeBinary, nullable=False))

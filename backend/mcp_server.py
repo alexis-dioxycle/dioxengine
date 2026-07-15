@@ -1,10 +1,10 @@
-"""MCP server for DioXengine — Claude Code transport.
+"""MCP server for DioXengine - Claude Code transport.
 
 Reached through the portal's `/_mcp/dioxengine` pass-through route (see the
-dioxycle-apps SKILL.md, "MCP endpoints" — a sanctioned exception to the
+dioxycle-apps SKILL.md, "MCP endpoints" - a sanctioned exception to the
 portal-identity contract for this app). Auth is a static Bearer token: the
 `MCP_API_KEY` portal secret. The acting identity comes from the
-`X-Dioxengine-User` header (an @dioxycle.com email) — access control (project
+`X-Dioxengine-User` header (an @dioxycle.com email) - access control (project
 membership, role slots) applies to that email exactly as in the web UI, and
 every write is logged with actor_kind='assistant'.
 
@@ -17,7 +17,7 @@ Claude Code setup:
 Local dev (no DATABASE_URL): the token check is skipped and the acting user
 defaults to dev@dioxycle.com.
 
-Tools — read: list_projects, get_project, get_document, get_upstream_content,
+Tools - read: list_projects, get_project, get_document, get_upstream_content,
 list_templates. Write (draft): update_text_section, update_table_section,
 append_table_rows. Collaborate: list_comments, add_comment, reply_to_comment,
 resolve_comment, submit_document, review_document (ask first). Build:
@@ -198,13 +198,13 @@ def get_project(project_id: int) -> str:
 @mcp.tool()
 def get_document(document_id: int) -> str:
     """Read one document: its section schema (keys, titles, text vs table with
-    typed columns), its SKILL (the recipe for producing it — which upstream
+    typed columns), its SKILL (the recipe for producing it - which upstream
     documents to pull from and what to take from each; follow it when
-    generating content), its TOOLS (deterministic Dioxycle Apps endpoints —
+    generating content), its TOOLS (deterministic Dioxycle Apps endpoints -
     call them via use_document_tool for calculated values instead of
     estimating), the current working content (open draft if any, else the
     latest revision), version history, upstream documents, and open comments.
-    ALWAYS call this before editing — section keys and table columns must
+    ALWAYS call this before editing - section keys and table columns must
     match the schema exactly.
 
     Args:
@@ -410,7 +410,7 @@ def resolve_comment(comment_id: int, document_id: int, reply: str = "") -> str:
 def submit_document(document_id: int) -> str:
     """Submit the document's draft for review, on behalf of the acting user
     (allowed only if they are the assigned author or the slot is unassigned).
-    Ask the user before calling this — submitting freezes the draft until the
+    Ask the user before calling this - submitting freezes the draft until the
     reviewer decides.
 
     Args:
@@ -486,7 +486,7 @@ def create_template(name: str, description: str = "") -> str:
 @mcp.tool()
 def update_template_graph(template_version_id: int, graph_json: str) -> str:
     """Replace the whole graph (document types + links) of a DRAFT template
-    version. Published versions are frozen — create a new version instead.
+    version. Published versions are frozen - create a new version instead.
 
     graph_json shape:
       {"nodes": [{"node_key": "el", "name": "Sized Equipment List",
@@ -651,7 +651,7 @@ def seed_reference_templates(which: str = "all") -> str:
 def review_document(document_id: int, decision: str, comment: str = "") -> str:
     """Approve or reject the submitted revision of a document, acting as the
     user (allowed only if they are the assigned reviewer or the slot is
-    unassigned). ALWAYS confirm with the user before calling this — approval
+    unassigned). ALWAYS confirm with the user before calling this - approval
     supersedes the previous approved revision and unlocks downstream work.
 
     Args:
@@ -697,7 +697,7 @@ def upload_attachment(document_id: int, filename: str, content_base64: str,
                       content_type: str = "application/pdf",
                       kind: str = "reference") -> str:
     """Attach a file to a document (max 15 MB). PDFs render inline in the web
-    editor — use this to give a document its real drawing or original file.
+    editor - use this to give a document its real drawing or original file.
 
     Args:
         document_id: The document to attach to.
@@ -705,7 +705,7 @@ def upload_attachment(document_id: int, filename: str, content_base64: str,
         content_base64: The file bytes, base64-encoded.
         content_type: MIME type (default application/pdf).
         kind: 'reference' (supporting original, default) or 'deliverable'
-            (this file IS the document — e.g. an AutoCAD P&ID exported to PDF
+            (this file IS the document - e.g. an AutoCAD P&ID exported to PDF
             that no structured section will replace).
     """
     def body(db, me):
@@ -728,9 +728,9 @@ def upload_attachment(document_id: int, filename: str, content_base64: str,
 
 @mcp.tool()
 def download_attachment(document_id: int, attachment_id: int) -> str:
-    """Read an attachment's bytes, base64-encoded (max 4 MB through MCP —
+    """Read an attachment's bytes, base64-encoded (max 4 MB through MCP -
     bigger files: open the document in the web UI). Use this to extract
-    information from an uploaded original — e.g. a P&ID PDF drawn in AutoCAD
+    information from an uploaded original - e.g. a P&ID PDF drawn in AutoCAD
     and attached as the document's deliverable: save it locally, read it, then
     fill the downstream documents from what it contains.
 
@@ -744,7 +744,7 @@ def download_attachment(document_id: int, attachment_id: int) -> str:
         if not a or a.document_id != document_id:
             raise ValueError("Attachment not found")
         if (a.size_bytes or 0) > 4 * 1024 * 1024:
-            raise ValueError(f"Attachment is {a.size_bytes} bytes — too large for MCP "
+            raise ValueError(f"Attachment is {a.size_bytes} bytes - too large for MCP "
                              "(max 4 MB); download it from the web editor instead")
         return {"filename": a.filename, "content_type": a.content_type,
                 "size_bytes": a.size_bytes, "kind": a.kind or "reference",
@@ -754,7 +754,7 @@ def download_attachment(document_id: int, attachment_id: int) -> str:
 
 @mcp.tool()
 def set_document_skill(template_version_id: int, node_key: str, skill: str) -> str:
-    """Write the SKILL of a document type — the recipe for producing that
+    """Write the SKILL of a document type - the recipe for producing that
     document: which upstream documents to pull from, what to take from each,
     the granularity expected, which tools/apps to use. Works on PUBLISHED
     versions too (template owners only): refining a skill is guidance, not a
@@ -776,7 +776,7 @@ def set_document_skill(template_version_id: int, node_key: str, skill: str) -> s
         svc.require_template_access(db, tv.template_id, me, need_owner=True)
         node = next((n for n in tv.nodes if n.node_key == node_key), None)
         if not node:
-            raise ValueError(f"No document type '{node_key}' in this version — "
+            raise ValueError(f"No document type '{node_key}' in this version - "
                              "valid keys: " + ", ".join(n.node_key for n in tv.nodes))
         node.skill = skill
         db.commit()
@@ -787,7 +787,7 @@ def set_document_skill(template_version_id: int, node_key: str, skill: str) -> s
 @mcp.tool()
 def delete_template(template_id: int) -> str:
     """Delete a whole workflow template (all its versions). Refused while any
-    project instantiates one of its versions. DESTRUCTIVE — always confirm
+    project instantiates one of its versions. DESTRUCTIVE - always confirm
     with the user before calling this.
 
     Args:
@@ -802,7 +802,7 @@ def delete_template(template_id: int) -> str:
                     if version_ids else [])
         if blocking:
             raise ValueError(f"{len(blocking)} project(s) use this template "
-                             f"({', '.join(p.name for p in blocking[:5])}) — delete them first")
+                             f"({', '.join(p.name for p in blocking[:5])}) - delete them first")
         db.query(TemplateOwner).filter_by(template_id=template_id).delete()
         from models import TemplateUser as _TU
         db.query(_TU).filter_by(template_id=template_id).delete()
@@ -814,10 +814,22 @@ def delete_template(template_id: int) -> str:
 
 
 @mcp.tool()
+def list_available_tools() -> str:
+    """The Dioxycle Apps tool catalog: every deterministic endpoint the apps
+    on the portal expose (declared in their manifest with a description and
+    expected params). Use it to find a calc worth attaching to a document
+    type with set_document_tools; entries can be attached as-is."""
+    def body(db, me):
+        import app_tools
+        return {"tools": app_tools.fetch_catalog()}
+    return _run(body)
+
+
+@mcp.tool()
 def use_document_tool(document_id: int, tool_name: str, params_json: str = "{}") -> str:
     """Call one of the deterministic tools attached to a document (listed in
     get_document's "tools", with their expected params). Use these for
-    calculated values — pressure drops, sizing, ratings — instead of
+    calculated values - pressure drops, sizing, ratings - instead of
     estimating: deterministic calcs live in Dioxycle Apps, the assistant
     orchestrates. The HTTP call is made by the DioXengine backend against an
     allowlisted host; the result is returned verbatim.
@@ -834,7 +846,7 @@ def use_document_tool(document_id: int, tool_name: str, params_json: str = "{}")
         tools = doc.node.tools or []
         tool = next((t for t in tools if t.get("name") == tool_name), None)
         if not tool:
-            raise ValueError(f"No tool '{tool_name}' on this document — available: "
+            raise ValueError(f"No tool '{tool_name}' on this document - available: "
                              + (", ".join(t.get("name", "?") for t in tools) or "none"))
         params = json.loads(params_json) if params_json.strip() else {}
         if not isinstance(params, dict):
@@ -850,7 +862,7 @@ def use_document_tool(document_id: int, tool_name: str, params_json: str = "{}")
 @mcp.tool()
 def set_document_tools(template_version_id: int, node_key: str, tools_json: str) -> str:
     """Attach deterministic tools (Dioxycle Apps endpoints) to a document
-    type — replaces its full tool list. Works on PUBLISHED versions too
+    type - replaces its full tool list. Works on PUBLISHED versions too
     (template owners only), like set_document_skill.
 
     tools_json: JSON array, e.g.
@@ -873,7 +885,7 @@ def set_document_tools(template_version_id: int, node_key: str, tools_json: str)
         svc.require_template_access(db, tv.template_id, me, need_owner=True)
         node = next((n for n in tv.nodes if n.node_key == node_key), None)
         if not node:
-            raise ValueError(f"No document type '{node_key}' in this version — "
+            raise ValueError(f"No document type '{node_key}' in this version - "
                              "valid keys: " + ", ".join(n.node_key for n in tv.nodes))
         node.tools = app_tools.validate_tools(json.loads(tools_json))
         db.commit()
@@ -898,7 +910,7 @@ def sharepoint_sync_project(project_id: int) -> str:
     document: pushes local changes (the rendered .xlsx/.docx, or the
     uploaded deliverable as-is), pulls edits made on SharePoint back into a
     draft (approved/submitted documents are locked and never pulled), and
-    reports conflicts (both sides changed — nothing is clobbered). Returns
+    reports conflicts (both sides changed - nothing is clobbered). Returns
     the per-document report; relay conflicts and locks to the user.
 
     Args:

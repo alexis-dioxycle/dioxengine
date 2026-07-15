@@ -47,7 +47,7 @@ export default function Home({ me }) {
         <div>
           <h1 className="title">Projects</h1>
           <p className="soft small" style={{ margin: '4px 0 0' }}>
-            Each project instantiates a workflow template — a DAG of documents that feed each other.
+            Each project instantiates a workflow template - a DAG of documents that feed each other.
           </p>
         </div>
         <button className="btn primary" onClick={() => setCreating(true)}
@@ -65,8 +65,8 @@ export default function Home({ me }) {
             {published.length === 0 && (
               <p className="muted small">
                 Start from a seed:&nbsp;
-                <button className="btn sm" onClick={() => seed('api/seed-workflow1')}>Seed “Workflow 1 — Procurement”</button>
-                &nbsp;<button className="btn sm" onClick={() => seed('api/seed-workflow2')}>Seed “Workflow 2 — Control & Safety”</button>
+                <button className="btn sm" onClick={() => seed('api/seed-workflow1')}>Seed “Workflow 1 - Procurement”</button>
+                &nbsp;<button className="btn sm" onClick={() => seed('api/seed-workflow2')}>Seed “Workflow 2 - Control & Safety”</button>
                 &nbsp;<button className="btn sm" onClick={() => seed('api/seed-example')}>Seed “Electrolyzer Basic Engineering”</button>
               </p>
             )}
@@ -156,7 +156,7 @@ function NewProject({ published, onClose, onDone }) {
         <h2>New project</h2>
         <label className="lbl">Name</label>
         <input className="input" autoFocus required value={name} onChange={e => setName(e.target.value)}
-               placeholder="e.g. BOS Pilot — Fos-sur-Mer" style={{ marginBottom: 14 }} />
+               placeholder="e.g. BOS Pilot - Fos-sur-Mer" style={{ marginBottom: 14 }} />
         <label className="lbl">Description</label>
         <input className="input" value={description} onChange={e => setDescription(e.target.value)}
                style={{ marginBottom: 14 }} />
@@ -164,7 +164,7 @@ function NewProject({ published, onClose, onDone }) {
         <select className="input" value={tv} onChange={e => setTv(Number(e.target.value))} style={{ marginBottom: 20 }}>
           {published.map(p => (
             <option key={p.version.id} value={p.version.id}>
-              {p.template.name} — v{p.version.version_number}
+              {p.template.name} - v{p.version.version_number}
             </option>
           ))}
         </select>

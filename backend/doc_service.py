@@ -2,7 +2,7 @@
 
 Everything that touches a document goes through here so the web UI and Claude
 behave identically: same access rules, same draft lifecycle, same activity
-trail. `actor_kind` distinguishes a human edit from an assistant edit — the
+trail. `actor_kind` distinguishes a human edit from an assistant edit - the
 data path is deliberately the same.
 """
 from datetime import datetime
@@ -16,7 +16,7 @@ from models import (
     WorkflowTemplate,
 )
 
-# `user` arguments below are the portal's DioxycleUser (dioxycle_auth) —
+# `user` arguments below are the portal's DioxycleUser (dioxycle_auth) -
 # only `.email` is used, so any object with an email attribute works.
 
 
@@ -196,7 +196,7 @@ def section_spec(doc: Document, section_key: str) -> dict:
     for s in (doc.node.content_schema or {}).get("sections", []):
         if s.get("key") == section_key:
             return s
-    raise HTTPException(422, f"Unknown section '{section_key}' — valid keys: "
+    raise HTTPException(422, f"Unknown section '{section_key}' - valid keys: "
                         + ", ".join(s.get("key", "?") for s in (doc.node.content_schema or {}).get("sections", [])))
 
 
@@ -210,7 +210,7 @@ def validate_rows(spec: dict, rows: list) -> list:
             raise HTTPException(422, "Each row must be an object")
         unknown = set(r) - cols
         if unknown:
-            raise HTTPException(422, f"Unknown columns {sorted(unknown)} — valid: {sorted(cols)}")
+            raise HTTPException(422, f"Unknown columns {sorted(unknown)} - valid: {sorted(cols)}")
         clean.append({k: r.get(k, "") for k in cols})
     return clean
 
