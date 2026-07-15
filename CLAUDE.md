@@ -88,7 +88,7 @@ DATABASE_URL, run the lifecycle. See git log for the exact commands used.
 Three layers, three cadences:
 
 1. **Content/structure** (documents, templates, projects, comments, skills) —
-   no deploy ever. Through the web UI or the 26 MCP tools (Claude can build
+   no deploy ever. Through the web UI or the 28 MCP tools (Claude can build
    whole workflows: create_template → update_template_graph →
    publish_template → create_project; write per-document skills with
    set_document_skill — allowed on published versions).
@@ -145,6 +145,29 @@ Configured in Alexis's `~/.claude.json` for this project dir. The pip panel
   `delete_template` — owner only, 409 while any project instantiates any
   version. Project delete button on the project page (creator only). ORM
   cascade added for attachments (Postgres already cascades via FK).
+
+## SharePoint two-way sync (`backend/sharepoint.py`, migration 004)
+
+Documents LIVE on SharePoint for the rest of the company: folder per project
+(`DioXengine/<project>/`), one file per document — rendered .xlsx (any doc
+with tables), rendered .docx (text-only), or the uploaded deliverable as-is.
+Renderers live in `backend/renderers.py` (shared with /export routes) with
+schema-driven inverse parsers (parse_xlsx/parse_docx) that make pull-back
+possible. Sync is conservative: remote-only change → pull into a draft
+(attributed to the SharePoint modifier); local-only → push; both → conflict
+reported, nothing clobbered; approved/submitted heads are pushed but never
+pulled (locked); file deleted on SharePoint → re-pushed. `sharepoint_links`
+table stores drive_item_id + etag + pushed_stamp per document. Entry points:
+`POST /api/projects/{pid}/sharepoint/sync`, `GET /api/sharepoint/status`,
+MCP `sharepoint_sync_project` / `sharepoint_status`, ⇅ button on the project
+page (report modal). Auth: Entra client credentials, Sites.Selected
+application permission granted per site — secrets MS_TENANT_ID /
+MS_CLIENT_ID / MS_CLIENT_SECRET / SHAREPOINT_SITE
+(`dioxycle.sharepoint.com:/sites/engineering`); local dev reads
+`backend/.env` (gitignored). Manifest egress: login.microsoftonline.com +
+graph.microsoft.com. STATE: credentials verified live (token OK, site
+exists) — waiting on Bastien's Sites.Selected grant on /sites/engineering
+(status endpoint currently returns the 403 hint).
 
 ## Status (2026-07-15) & next steps
 

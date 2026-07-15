@@ -24,7 +24,8 @@ resolve_comment, submit_document, review_document (ask first). Build:
 create_template, update_template_graph, publish_template, create_project,
 add_project_members, seed_reference_templates, new_template_version,
 set_document_skill, delete_template (ask first). Files: list_attachments,
-upload_attachment, download_attachment.
+upload_attachment, download_attachment. SharePoint: sharepoint_status,
+sharepoint_sync_project (two-way, folder per project).
 """
 import json
 import logging
@@ -802,6 +803,38 @@ def delete_template(template_id: int) -> str:
         db.delete(t)
         db.commit()
         return {"ok": True, "deleted": name}
+    return _run(body)
+
+
+@mcp.tool()
+def sharepoint_status() -> str:
+    """Check the SharePoint integration: configured? site reachable? Returns
+    the site name and URL when the Sites.Selected grant is in place."""
+    def body(db, me):
+        import sharepoint
+        return sharepoint.status()
+    return _run(body)
+
+
+@mcp.tool()
+def sharepoint_sync_project(project_id: int) -> str:
+    """Two-way sync of every document in a project against its
+    DioXengine/<project>/ folder on the company SharePoint site. Per
+    document: pushes local changes (the rendered .xlsx/.docx, or the
+    uploaded deliverable as-is), pulls edits made on SharePoint back into a
+    draft (approved/submitted documents are locked and never pulled), and
+    reports conflicts (both sides changed — nothing is clobbered). Returns
+    the per-document report; relay conflicts and locks to the user.
+
+    Args:
+        project_id: The project to sync (from list_projects).
+    """
+    def body(db, me):
+        import sharepoint
+        p = svc.require_project_member(db, project_id, me)
+        if not sharepoint.configured():
+            raise ValueError(sharepoint.status()["detail"])
+        return sharepoint.sync_project(db, p, me)
     return _run(body)
 
 

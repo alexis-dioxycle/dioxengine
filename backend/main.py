@@ -12,10 +12,22 @@ the app never authenticates anyone. Schema comes from backend/migrations/
   static SPA (built frontend) at /
 """
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+# Local dev only: read backend/.env (gitignored) so the SharePoint secrets
+# work without exporting them by hand. On the portal, secrets are injected
+# as real env vars and this file doesn't exist.
+_env_file = Path(__file__).parent / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            k, v = _line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
@@ -32,7 +44,9 @@ from models import (
     User, WorkflowTemplate,
 )
 import doc_service as svc
+import renderers
 import seed
+import sharepoint
 from mcp_server import MCPAuthMiddleware, mcp
 
 logging.basicConfig(level=logging.INFO)
@@ -713,149 +727,54 @@ def delete_attachment(did: int, aid: int, user: DioxycleUser = Depends(track_use
     return {"ok": True}
 
 
-# ============ Excel export ============
+# ============ deliverable exports (rendered from structured content) ============
 
 @app.get("/api/documents/{did}/export.xlsx")
 def export_xlsx(did: int, user: DioxycleUser = Depends(track_user),
                 db: Session = Depends(get_db)):
-    """Render the document's structured content as an Excel workbook — one
-    sheet per table section, a 'Notes' sheet for text sections. First step of
-    the Word/Excel deliverable exports."""
-    import io
-    from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Font
-    from openpyxl.utils import get_column_letter
-
     doc = svc.get_document_or_404(db, did, user)
     head = svc.latest_version(doc)
-    content = (head.content if head else {}) or {}
-    sections = (doc.node.content_schema or {}).get("sections", [])
-
-    wb = Workbook()
-    wb.remove(wb.active)
-    hdr_font = Font(bold=True, size=9, name="Calibri")
-    texts = []
-    for s in sections:
-        if s.get("type") == "table":
-            ws = wb.create_sheet(title=(s.get("title") or s["key"])[:31])
-            cols = s.get("columns", [])
-            ws.append([c["label"] for c in cols])
-            for cell in ws[1]:
-                cell.font = hdr_font
-                cell.alignment = Alignment(wrap_text=True, vertical="top")
-            for row in content.get(s["key"], []) or []:
-                ws.append([row.get(c["key"], "") for c in cols])
-            for i, c in enumerate(cols, 1):
-                ws.column_dimensions[get_column_letter(i)].width = max(12, min(38, len(c["label"]) + 6))
-            ws.freeze_panes = "A2"
-        else:
-            texts.append((s.get("title") or s["key"], content.get(s["key"], "") or ""))
-    if texts:
-        ws = wb.create_sheet(title="Notes")
-        for title, body in texts:
-            ws.append([title])
-            ws.cell(row=ws.max_row, column=1).font = hdr_font
-            ws.append([body])
-            ws.append([])
-        ws.column_dimensions["A"].width = 110
-        for r in ws.iter_rows():
-            r[0].alignment = Alignment(wrap_text=True, vertical="top")
-    if not wb.sheetnames:
-        wb.create_sheet(title="Empty")
-
-    buf = io.BytesIO()
-    wb.save(buf)
     rev = head.version_number if head else 0
     fname = f"{doc.project.name}-{doc.node.node_key.upper()}-rev{rev:03d}.xlsx".replace(" ", "_")
     return Response(
-        content=buf.getvalue(),
+        content=renderers.render_xlsx(doc, head),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": _content_disposition("attachment", fname)})
 
 
-# ============ Word export ============
-
 @app.get("/api/documents/{did}/export.docx")
 def export_docx(did: int, user: DioxycleUser = Depends(track_user),
                 db: Session = Depends(get_db)):
-    """Render the document as a Word file generated from its structured
-    content: cover block (doc number, revision, dates, author/reviewer),
-    then one heading per section with prose or a styled table. Per-type
-    Dioxycle templates (PROJECT-CTL-001 style) come next; this generic
-    renderer is the default."""
-    import io
-    from docx import Document as Docx
-    from docx.enum.table import WD_TABLE_ALIGNMENT
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.shared import Cm, Pt, RGBColor
-
     doc = svc.get_document_or_404(db, did, user)
     head = svc.latest_version(doc)
-    content = (head.content if head else {}) or {}
-    sections = (doc.node.content_schema or {}).get("sections", [])
-    rev = head.version_number if head else 0
-    doc_no = f"{doc.project.name.upper().replace(' ', '-')}-{doc.node.node_key.upper()}-{rev:03d}"
-
-    d = Docx()
-    style = d.styles["Normal"]
-    style.font.name = "Calibri"
-    style.font.size = Pt(10)
-    for s in d.sections:
-        s.left_margin = s.right_margin = Cm(2)
-
-    p = d.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    r = p.add_run(doc_no)
-    r.font.size = Pt(8)
-    r.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
-
-    h = d.add_heading(doc.node.name, level=0)
-    if doc.node.description:
-        d.add_paragraph(doc.node.description).runs[0].italic = True
-
-    meta = d.add_table(rows=2, cols=4)
-    meta.style = "Table Grid"
-    meta.alignment = WD_TABLE_ALIGNMENT.LEFT
-    cells = [("Project", doc.project.name), ("Revision", str(rev)),
-             ("Status", (head.status if head else "empty")),
-             ("Date", (head.updated_at.strftime("%Y-%m-%d") if head and head.updated_at else "")),
-             ("Author", doc.author_email or f"({doc.node.author_role or 'unassigned'})"),
-             ("Reviewer", doc.reviewer_email or f"({doc.node.reviewer_role or 'unassigned'})"),
-             ("Approved by", head.reviewed_by or "" if head else ""), ("Doc N°", doc_no)]
-    for i, (k, v) in enumerate(cells):
-        cell = meta.rows[i // 4].cells[i % 4]
-        para = cell.paragraphs[0]
-        run = para.add_run(f"{k}\n")
-        run.bold = True
-        run.font.size = Pt(7.5)
-        para.add_run(str(v)).font.size = Pt(9)
-
-    for s in sections:
-        d.add_heading(s.get("title") or s["key"], level=2)
-        if s.get("type") == "table":
-            cols = s.get("columns", [])
-            rows = content.get(s["key"], []) or []
-            t = d.add_table(rows=1, cols=len(cols) or 1)
-            t.style = "Table Grid"
-            for i, c in enumerate(cols):
-                run = t.rows[0].cells[i].paragraphs[0].add_run(c["label"])
-                run.bold = True
-                run.font.size = Pt(8)
-            for row in rows:
-                tr = t.add_row()
-                for i, c in enumerate(cols):
-                    tr.cells[i].paragraphs[0].add_run(str(row.get(c["key"], "") or "")).font.size = Pt(8.5)
-        else:
-            for para_text in (content.get(s["key"], "") or "—").split("\n"):
-                d.add_paragraph(para_text)
-
-    buf = io.BytesIO()
-    d.save(buf)
-    fname = f"{doc_no}.docx"
+    fname = f"{renderers.doc_number(doc, head)}.docx"
     return Response(
-        content=buf.getvalue(),
+        content=renderers.render_docx(doc, head),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": _content_disposition("attachment", fname)})
+
+
+# ============ SharePoint two-way sync ============
+
+@app.get("/api/sharepoint/status")
+def sharepoint_status(user: DioxycleUser = Depends(track_user)):
+    return sharepoint.status()
+
+
+@app.post("/api/projects/{pid}/sharepoint/sync")
+def sharepoint_sync(pid: int, user: DioxycleUser = Depends(track_user),
+                    db: Session = Depends(get_db)):
+    """Two-way sync of every document in the project against its
+    DioXengine/<project>/ folder on the SharePoint site: push local changes
+    (rendered files / deliverables), pull remote edits back into drafts,
+    report conflicts and locked (approved) documents."""
+    p = svc.require_project_member(db, pid, user)
+    if not sharepoint.configured():
+        raise HTTPException(503, sharepoint.status()["detail"])
+    try:
+        return sharepoint.sync_project(db, p, user)
+    except sharepoint.GraphError as e:
+        raise HTTPException(502, str(e))
 
 
 # ============ static frontend (mounted after all API routes) ============

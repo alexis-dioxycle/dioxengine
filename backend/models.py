@@ -211,6 +211,24 @@ class Attachment(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class SharePointLink(Base):
+    """One row per document = its file on the SharePoint site. etag +
+    pushed_stamp are the sync fingerprints: remote etag moved -> pull;
+    local head moved past pushed_stamp -> push; both -> conflict."""
+    __tablename__ = "sharepoint_links"
+    document_id = Column(Integer, ForeignKey("documents.id"), primary_key=True)
+    kind = Column(String, nullable=False)  # docx | xlsx | attachment
+    attachment_id = Column(Integer, nullable=True)
+    file_name = Column(String, nullable=False)
+    folder_path = Column(String, default="")
+    drive_item_id = Column(String, nullable=False)
+    etag = Column(String, default="")
+    web_url = Column(String, default="")
+    pushed_stamp = Column(String, default="")
+    last_pushed_at = Column(DateTime, nullable=True)
+    last_pulled_at = Column(DateTime, nullable=True)
+
+
 class ActivityLog(Base):
     __tablename__ = "activity_log"
     id = Column(Integer, primary_key=True)

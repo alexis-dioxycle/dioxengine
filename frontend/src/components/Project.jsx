@@ -6,9 +6,21 @@ export default function ProjectPage({ id, me }) {
   const [p, setP] = useState(null);
   const [err, setErr] = useState('');
   const [showMembers, setShowMembers] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncReport, setSyncReport] = useState(null);
 
   const load = () => api.get(`api/projects/${id}`).then(setP).catch(e => setErr(e.message));
   useEffect(() => { load(); }, [id]);
+
+  async function syncSharePoint() {
+    setSyncing(true); setErr('');
+    try {
+      const r = await api.post(`api/projects/${id}/sharepoint/sync`);
+      setSyncReport(r);
+      load(); // pulls may have created drafts
+    } catch (e) { setErr(e.message); }
+    finally { setSyncing(false); }
+  }
 
   if (err) return <div className="page"><p style={{ color: 'var(--bad)' }}>{err}</p></div>;
   if (!p) return <div className="page" style={{ textAlign: 'center', paddingTop: 80 }}><span className="spin dark" /></div>;
@@ -24,6 +36,10 @@ export default function ProjectPage({ id, me }) {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn" onClick={syncSharePoint} disabled={syncing}
+                  title="Two-way sync: push documents to DioXengine/<project>/ on the SharePoint site, pull back edits made there">
+            {syncing ? <span className="spin dark" /> : '⇅ SharePoint'}
+          </button>
           <button className="btn" onClick={() => setShowMembers(true)}>
             Members <span className="muted">({p.members.length})</span>
           </button>
@@ -48,6 +64,50 @@ export default function ProjectPage({ id, me }) {
       </div>
 
       {showMembers && <Members p={p} onClose={() => setShowMembers(false)} onDone={load} />}
+      {syncReport && <SyncReport r={syncReport} onClose={() => setSyncReport(null)} />}
+    </div>
+  );
+}
+
+const SYNC_BADGE = {
+  pushed: { label: 'pushed', color: 'var(--ok)' },
+  pulled: { label: 'pulled', color: 'var(--accent)' },
+  up_to_date: { label: 'up to date', color: 'var(--ink-faint)' },
+  skipped: { label: 'skipped', color: 'var(--ink-faint)' },
+  locked: { label: 'locked', color: 'var(--warn)' },
+  conflict: { label: 'conflict', color: 'var(--bad)' },
+  error: { label: 'error', color: 'var(--bad)' },
+};
+
+function SyncReport({ r, onClose }) {
+  return (
+    <div className="overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 640 }}>
+        <h2>SharePoint sync</h2>
+        {r.folder && (
+          <p className="soft small" style={{ marginTop: -8 }}>
+            Folder: {r.folder_url
+              ? <a href={r.folder_url} target="_blank" rel="noreferrer">{r.folder}</a>
+              : r.folder}
+          </p>
+        )}
+        {(r.report || []).map((row, i) => {
+          const b = SYNC_BADGE[row.action] || { label: row.action, color: 'var(--ink-soft)' };
+          return (
+            <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '6px 0',
+                                  borderBottom: '1px solid var(--line)' }}>
+              <span className="pill" style={{ color: b.color, borderColor: 'currentColor', flexShrink: 0 }}>{b.label}</span>
+              <span style={{ fontWeight: 600, fontSize: 13.5, flexShrink: 0 }}>{row.document}</span>
+              <span className="muted small" style={{ minWidth: 0 }}>
+                {row.web_url ? <a href={row.web_url} target="_blank" rel="noreferrer">{row.detail}</a> : row.detail}
+              </span>
+            </div>
+          );
+        })}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+          <button className="btn" onClick={onClose}>Close</button>
+        </div>
+      </div>
     </div>
   );
 }
