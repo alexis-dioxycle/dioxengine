@@ -417,8 +417,10 @@ function NodeForm({ node, editable, onChange, onSections, publishedOwner, onErr,
   );
 }
 
-/* Deterministic tools (Dioxycle Apps endpoints) the assistant may call while
-   producing this document. Draft versions: saved with the graph. Published
+/* Deterministic tools attached to this document type. Catalog-only: an app
+   exposes a tool by declaring it in its portal manifest; here you attach it
+   from the catalog. Attached tools render as read-only cards (remove and
+   re-attach to change). Draft versions: saved with the graph. Published
    versions (owner): saved directly, like the skill. */
 function ToolsEditor({ node, editable, publishedOwner, onChange, onErr, onMsg }) {
   const tools = node.tools || [];
@@ -430,7 +432,6 @@ function ToolsEditor({ node, editable, publishedOwner, onChange, onErr, onMsg })
     onChange({ tools: next });
     if (publishedOwner) setDirty(true);
   }
-  function patchTool(i, p) { patch(tools.map((t, x) => (x === i ? { ...t, ...p } : t))); }
 
   async function openCatalog() {
     setCatErr('');
@@ -443,7 +444,8 @@ function ToolsEditor({ node, editable, publishedOwner, onChange, onErr, onMsg })
 
   function addFromCatalog(t) {
     const name = tools.some(x => x.name === t.name) ? `${t.app_slug.replace(/-/g, '_')}_${t.name}` : t.name;
-    patch([...tools, { name, description: t.description, url: t.url, method: t.method, params: t.params }]);
+    patch([...tools, { name, description: t.description, url: t.url, method: t.method,
+                       params: t.params, app_name: t.app_name, app_slug: t.app_slug }]);
     setCatalog(null);
   }
 
@@ -458,45 +460,39 @@ function ToolsEditor({ node, editable, publishedOwner, onChange, onErr, onMsg })
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
-        <label className="lbl">Tools - deterministic apps the assistant may call</label>
+        <label className="lbl">Tools: deterministic apps the assistant may call</label>
         {publishedOwner && dirty && <button className="btn sm" onClick={saveTools}>Save tools</button>}
       </div>
       {tools.map((t, i) => (
-        <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '170px 90px 1fr 30px', gap: 8, marginBottom: 6 }}>
-            <input className="input mono" style={{ fontSize: 12.5 }} placeholder="name (ex: pressure_drop)"
-                   value={t.name || ''} readOnly={!editable}
-                   onChange={e => patchTool(i, { name: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '') })} />
-            <select className="input" style={{ fontSize: 12.5 }} value={t.method || 'GET'} disabled={!editable}
-                    onChange={e => patchTool(i, { method: e.target.value })}>
-              <option>GET</option><option>POST</option>
-            </select>
-            <input className="input mono" style={{ fontSize: 12.5 }}
-                   placeholder="https://apps.dioxycle.com/_apps/<slug>/api/…"
-                   value={t.url || ''} readOnly={!editable}
-                   onChange={e => patchTool(i, { url: e.target.value })} />
-            {editable && (
-              <button className="icon-btn" title="Remove tool"
-                      onClick={() => patch(tools.filter((_, x) => x !== i))}>✕</button>
+        <div key={i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start',
+                              border: '1px solid var(--line)', borderRadius: 9,
+                              padding: '10px 14px', marginBottom: 8, background: 'var(--bg)' }}>
+          <span aria-hidden="true" style={{ fontSize: 17, lineHeight: '22px' }}>{'\u2699\ufe0f'}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+              <b className="mono" style={{ fontSize: 13.5 }}>{t.name}</b>
+              <span className="pill draft" style={{ fontSize: 10 }}>{t.method || 'GET'}</span>
+              {(t.app_name || t.app_slug) && (
+                <span className="muted small">via {t.app_name || t.app_slug}</span>
+              )}
+            </div>
+            {t.description && <div className="small" style={{ color: 'var(--ink-soft)', marginTop: 3 }}>{t.description}</div>}
+            {t.params && (
+              <div className="small" style={{ marginTop: 3 }}>
+                <span className="doc-no">PARAMS</span>{' '}
+                <span className="mono" style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{t.params}</span>
+              </div>
             )}
+            <div className="muted" style={{ fontSize: 11, marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.url}</div>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <input className="input" style={{ fontSize: 12.5 }} placeholder="Description (what it computes)"
-                   value={t.description || ''} readOnly={!editable}
-                   onChange={e => patchTool(i, { description: e.target.value })} />
-            <input className="input" style={{ fontSize: 12.5 }} placeholder="Params (ex: fluid, flow_kgh, diameter_mm)"
-                   value={t.params || ''} readOnly={!editable}
-                   onChange={e => patchTool(i, { params: e.target.value })} />
-          </div>
+          {editable && (
+            <button className="icon-btn" title="Detach this tool"
+                    onClick={() => patch(tools.filter((_, x) => x !== i))}>{'\u2715'}</button>
+          )}
         </div>
       ))}
-      {editable && (
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="add-row" onClick={openCatalog}>+ From the apps catalog</button>
-          <button className="add-row" onClick={() => patch([...tools, { name: '', description: '', url: '', method: 'GET', params: '' }])}>
-            + Custom tool
-          </button>
-        </div>
+      {editable && catalog === null && (
+        <button className="add-row" onClick={openCatalog}>+ Attach a tool from the apps catalog</button>
       )}
       {catErr && <p className="small" style={{ color: 'var(--bad)', marginTop: 6 }}>{catErr}</p>}
       {catalog !== null && !catErr && (
@@ -504,7 +500,7 @@ function ToolsEditor({ node, editable, publishedOwner, onChange, onErr, onMsg })
           <div style={{ display: 'flex', alignItems: 'center', padding: '8px 12px', borderBottom: '1px solid var(--line)', background: 'var(--bg)' }}>
             <span className="doc-no">Tools exposed by Dioxycle Apps</span>
             <span className="spacer" style={{ flex: 1 }} />
-            <button className="icon-btn" onClick={() => setCatalog(null)}>✕</button>
+            <button className="icon-btn" onClick={() => setCatalog(null)}>{'\u2715'}</button>
           </div>
           {catalog.length === 0 ? (
             <div className="muted small" style={{ padding: '12px 14px' }}>
@@ -517,9 +513,9 @@ function ToolsEditor({ node, editable, publishedOwner, onChange, onErr, onMsg })
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13.5 }}>
                   <b className="mono">{t.name}</b>
-                  <span className="muted"> · {t.app_name}</span>
+                  <span className="muted"> {'\u00b7'} {t.app_name}</span>
                 </div>
-                <div className="muted small">{t.description}{t.params ? ` · params: ${t.params}` : ''}</div>
+                <div className="muted small">{t.description}{t.params ? ` ${'\u00b7'} params: ${t.params}` : ''}</div>
               </div>
               <span className="btn ghost sm">attach</span>
             </div>

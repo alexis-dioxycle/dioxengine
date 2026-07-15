@@ -101,7 +101,10 @@ def validate_tools(tools: list) -> list:
                                      f"list ({', '.join(sorted(_allowed_hosts()))})")
         clean.append({"name": name, "description": (t.get("description") or "").strip(),
                       "url": url, "method": method,
-                      "params": (t.get("params") or "").strip()})
+                      "params": (t.get("params") or "").strip(),
+                      # provenance shown in the UI card ("via <app>")
+                      "app_name": (t.get("app_name") or "").strip(),
+                      "app_slug": (t.get("app_slug") or "").strip()})
     return clean
 
 

@@ -290,10 +290,14 @@ def update_template_version(tvid: int, body: GraphPayload,
         raise HTTPException(409, "Published template versions are frozen; create a new version")
     svc.validate_dag([n.model_dump() for n in body.nodes],
                      [e.model_dump() for e in body.edges])
+    import app_tools
+    nodes = [n.model_dump() for n in body.nodes]
+    for n in nodes:
+        n["tools"] = app_tools.validate_tools(n.get("tools", []))
     db.query(DocumentTypeNode).filter_by(template_version_id=tvid).delete()
     db.query(TemplateEdge).filter_by(template_version_id=tvid).delete()
     db.flush()
-    seed.write_graph(db, tv, [n.model_dump() for n in body.nodes],
+    seed.write_graph(db, tv, nodes,
                      [(e.from_key, e.to_key) for e in body.edges])
     db.commit()
     return {"ok": True}
