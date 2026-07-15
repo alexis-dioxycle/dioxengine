@@ -637,3 +637,56 @@ def review_document(document_id: int, decision: str, comment: str = "") -> str:
         v = svc.review(db, doc, me, decision, comment, actor_kind="assistant")
         return {"ok": True, "version_number": v.version_number, "status": v.status}
     return _run(body)
+
+
+# ============ ATTACHMENT TOOLS ============
+
+from models import Attachment  # noqa: E402
+import base64 as _b64  # noqa: E402
+
+
+@mcp.tool()
+def list_attachments(document_id: int) -> str:
+    """List the files attached to a document (the human-readable originals:
+    PFD drawing PDF, vendor offer PDFs, issued datasheets...). They render
+    inline in the web editor.
+
+    Args:
+        document_id: The document.
+    """
+    def body(db, me):
+        _doc(db, me, document_id)
+        rows = db.query(Attachment).filter_by(document_id=document_id).order_by(Attachment.id).all()
+        return {"attachments": [{
+            "id": a.id, "filename": a.filename, "content_type": a.content_type,
+            "size_bytes": a.size_bytes, "uploaded_by": a.uploaded_by,
+        } for a in rows]}
+    return _run(body)
+
+
+@mcp.tool()
+def upload_attachment(document_id: int, filename: str, content_base64: str,
+                      content_type: str = "application/pdf") -> str:
+    """Attach a file to a document (max 15 MB). PDFs render inline in the web
+    editor — use this to give a document its real drawing or original file.
+
+    Args:
+        document_id: The document to attach to.
+        filename: File name shown to users (e.g. "5000F2PBOS-PFD-001-rev002.pdf").
+        content_base64: The file bytes, base64-encoded.
+        content_type: MIME type (default application/pdf).
+    """
+    def body(db, me):
+        doc = _doc(db, me, document_id)
+        data = _b64.b64decode(content_base64)
+        if len(data) > 15 * 1024 * 1024:
+            raise ValueError("Attachment too large (max 15 MB)")
+        a = Attachment(document_id=document_id, filename=filename,
+                       content_type=content_type, size_bytes=len(data),
+                       data=data, uploaded_by=me.email)
+        db.add(a)
+        svc.log(db, document=doc, actor_email=me.email, actor_kind="assistant",
+                action="attach", payload={"filename": filename})
+        db.commit()
+        return {"ok": True, "attachment_id": a.id, "size_bytes": len(data)}
+    return _run(body)

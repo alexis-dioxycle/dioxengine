@@ -17,7 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -26,9 +27,9 @@ from starlette.routing import Route as StarletteRoute
 from database import IS_LOCAL_DEV, Base, engine, get_db
 from dioxycle_auth import DioxycleUser, current_user
 from models import (
-    ActivityLog, Document, DocumentTypeNode, Project, ProjectMember,
-    TemplateEdge, TemplateOwner, TemplateUser, TemplateVersion, User,
-    WorkflowTemplate,
+    ActivityLog, Attachment, Document, DocumentTypeNode, Project,
+    ProjectMember, TemplateEdge, TemplateOwner, TemplateUser, TemplateVersion,
+    User, WorkflowTemplate,
 )
 import doc_service as svc
 import seed
@@ -572,6 +573,128 @@ def seed_workflow2(user: DioxycleUser = Depends(track_user), db: Session = Depen
     if t is None:
         raise HTTPException(409, "Workflow 2 template already exists")
     return {"template_id": t.id}
+
+
+# ============ attachments ============
+
+MAX_ATTACHMENT_MB = 15
+
+
+def _attachment_public(a: Attachment) -> dict:
+    return {"id": a.id, "filename": a.filename, "content_type": a.content_type,
+            "size_bytes": a.size_bytes, "uploaded_by": a.uploaded_by,
+            "created_at": a.created_at.isoformat() if a.created_at else None}
+
+
+@app.get("/api/documents/{did}/attachments")
+def list_attachments(did: int, user: DioxycleUser = Depends(track_user),
+                     db: Session = Depends(get_db)):
+    svc.get_document_or_404(db, did, user)
+    rows = db.query(Attachment).filter_by(document_id=did).order_by(Attachment.id).all()
+    return [_attachment_public(a) for a in rows]
+
+
+@app.post("/api/documents/{did}/attachments")
+async def upload_attachment(did: int, file: UploadFile = File(...),
+                            user: DioxycleUser = Depends(track_user),
+                            db: Session = Depends(get_db)):
+    doc = svc.get_document_or_404(db, did, user)
+    data = await file.read()
+    if len(data) > MAX_ATTACHMENT_MB * 1024 * 1024:
+        raise HTTPException(413, f"Attachment too large (max {MAX_ATTACHMENT_MB} MB)")
+    a = Attachment(document_id=did, filename=file.filename or "file",
+                   content_type=file.content_type or "application/octet-stream",
+                   size_bytes=len(data), data=data, uploaded_by=user.email)
+    db.add(a)
+    svc.log(db, document=doc, actor_email=user.email, actor_kind="user",
+            action="attach", payload={"filename": a.filename})
+    db.commit()
+    return _attachment_public(a)
+
+
+@app.get("/api/documents/{did}/attachments/{aid}")
+def get_attachment(did: int, aid: int, user: DioxycleUser = Depends(track_user),
+                   db: Session = Depends(get_db)):
+    svc.get_document_or_404(db, did, user)
+    a = db.get(Attachment, aid)
+    if not a or a.document_id != did:
+        raise HTTPException(404, "Attachment not found")
+    return Response(content=a.data, media_type=a.content_type,
+                    headers={"Content-Disposition": f'inline; filename="{a.filename}"'})
+
+
+@app.delete("/api/documents/{did}/attachments/{aid}")
+def delete_attachment(did: int, aid: int, user: DioxycleUser = Depends(track_user),
+                      db: Session = Depends(get_db)):
+    doc = svc.get_document_or_404(db, did, user)
+    a = db.get(Attachment, aid)
+    if not a or a.document_id != did:
+        raise HTTPException(404, "Attachment not found")
+    db.delete(a)
+    svc.log(db, document=doc, actor_email=user.email, actor_kind="user",
+            action="detach", payload={"filename": a.filename})
+    db.commit()
+    return {"ok": True}
+
+
+# ============ Excel export ============
+
+@app.get("/api/documents/{did}/export.xlsx")
+def export_xlsx(did: int, user: DioxycleUser = Depends(track_user),
+                db: Session = Depends(get_db)):
+    """Render the document's structured content as an Excel workbook — one
+    sheet per table section, a 'Notes' sheet for text sections. First step of
+    the Word/Excel deliverable exports."""
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.utils import get_column_letter
+
+    doc = svc.get_document_or_404(db, did, user)
+    head = svc.latest_version(doc)
+    content = (head.content if head else {}) or {}
+    sections = (doc.node.content_schema or {}).get("sections", [])
+
+    wb = Workbook()
+    wb.remove(wb.active)
+    hdr_font = Font(bold=True, size=9, name="Calibri")
+    texts = []
+    for s in sections:
+        if s.get("type") == "table":
+            ws = wb.create_sheet(title=(s.get("title") or s["key"])[:31])
+            cols = s.get("columns", [])
+            ws.append([c["label"] for c in cols])
+            for cell in ws[1]:
+                cell.font = hdr_font
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+            for row in content.get(s["key"], []) or []:
+                ws.append([row.get(c["key"], "") for c in cols])
+            for i, c in enumerate(cols, 1):
+                ws.column_dimensions[get_column_letter(i)].width = max(12, min(38, len(c["label"]) + 6))
+            ws.freeze_panes = "A2"
+        else:
+            texts.append((s.get("title") or s["key"], content.get(s["key"], "") or ""))
+    if texts:
+        ws = wb.create_sheet(title="Notes")
+        for title, body in texts:
+            ws.append([title])
+            ws.cell(row=ws.max_row, column=1).font = hdr_font
+            ws.append([body])
+            ws.append([])
+        ws.column_dimensions["A"].width = 110
+        for r in ws.iter_rows():
+            r[0].alignment = Alignment(wrap_text=True, vertical="top")
+    if not wb.sheetnames:
+        wb.create_sheet(title="Empty")
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    rev = head.version_number if head else 0
+    fname = f"{doc.project.name}-{doc.node.node_key.upper()}-rev{rev:03d}.xlsx".replace(" ", "_")
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 # ============ static frontend (mounted after all API routes) ============

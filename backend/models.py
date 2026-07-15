@@ -13,9 +13,10 @@ changed what, human or assistant.
 from datetime import datetime
 
 from sqlalchemy import (
-    JSON, Column, DateTime, ForeignKey, Integer, String, Text,
+    JSON, Column, DateTime, ForeignKey, Integer, LargeBinary, String, Text,
     UniqueConstraint,
 )
+from sqlalchemy.orm import deferred
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -182,6 +183,22 @@ class Comment(Base):
 
     document = relationship("Document", back_populates="comments")
     replies = relationship("Comment", order_by="Comment.created_at")
+
+
+class Attachment(Base):
+    """The real files behind a document (PFD drawing, offer PDFs, issued
+    datasheets). Structured sections stay the source of truth for the DAG;
+    attachments are the human-readable originals. `data` is deferred so
+    listings never load the bytes."""
+    __tablename__ = "attachments"
+    id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey("documents.id"), nullable=False)
+    filename = Column(String, nullable=False)
+    content_type = Column(String, default="application/octet-stream")
+    size_bytes = Column(Integer, default=0)
+    data = deferred(Column(LargeBinary, nullable=False))
+    uploaded_by = Column(String, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class ActivityLog(Base):

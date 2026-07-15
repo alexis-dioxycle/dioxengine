@@ -21,6 +21,11 @@ export default function DocumentEditor({ id, me }) {
   const [showResolved, setShowResolved] = useState(false);
   const [viewVersion, setViewVersion] = useState(null); // read-only past rev
   const [oldContent, setOldContent] = useState(null);
+  const [attachments, setAttachments] = useState([]);
+  const [previewId, setPreviewId] = useState(null);      // attachment shown inline
+  const [highlight, setHighlight] = useState(null);      // {section, row} from comment hover
+  const [railComments, setRailComments] = useState(true);
+  const [railActivity, setRailActivity] = useState(false);
 
   const serverStamp = useRef(null);
   const dirtyRef = useRef(false);
@@ -62,6 +67,36 @@ export default function DocumentEditor({ id, me }) {
     }, POLL_MS);
     return () => { alive = false; clearInterval(t); };
   }, [id, apply]);
+
+  useEffect(() => {
+    api.get(`api/documents/${id}/attachments`).then(a => {
+      setAttachments(a);
+      // auto-open the first PDF (the drawing IS the document for a PFD)
+      const pdf = a.find(x => x.content_type === 'application/pdf');
+      if (pdf) setPreviewId(prev => prev ?? pdf.id);
+    }).catch(() => {});
+  }, [id, doc?.latest_updated_at]);
+
+  async function uploadFile(file) {
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const res = await fetch(`api/documents/${id}/attachments`, { method: 'POST', body: form });
+      if (!res.ok) throw new Error((await res.json())?.detail || `HTTP ${res.status}`);
+      setAttachments(await api.get(`api/documents/${id}/attachments`));
+      setToastTimed(`Attached ${file.name}`);
+    } catch (e) { setErr(e.message); }
+  }
+
+  function jumpTo(section, row) {
+    const el = document.getElementById(row !== null && row !== undefined && row >= 0
+      ? `sec-${section}-row-${row}` : `sec-${section}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlight({ section, row });
+      setTimeout(() => setHighlight(null), 2200);
+    }
+  }
 
   function setToastTimed(msg) {
     setToast(msg);
@@ -163,6 +198,7 @@ export default function DocumentEditor({ id, me }) {
             <span className="dot" />
             {saving ? 'saving…' : dirty ? 'editing…' : status ? `rev ${doc.latest_version_number} saved` : 'no content yet'}
           </span>
+          <a className="btn sm" href={`api/documents/${id}/export.xlsx`} title="Download the document as an Excel workbook">⤓ .xlsx</a>
           <select className="input" style={{ width: 'auto', padding: '5px 8px', fontSize: 12.5 }}
                   value={viewVersion ?? ''}
                   onChange={e => openVersion(e.target.value === '' ? null : Number(e.target.value))}>
@@ -228,11 +264,36 @@ export default function DocumentEditor({ id, me }) {
             </div>
           )}
 
+          {/* the real files behind this document */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '12px 0 4px' }}>
+            {attachments.map(a => (
+              <span key={a.id} className="attach-chip">
+                <a onClick={() => setPreviewId(previewId === a.id ? null : a.id)}
+                   style={{ cursor: 'pointer' }}
+                   title={previewId === a.id ? 'Hide preview' : 'Show preview'}>
+                  {a.content_type === 'application/pdf' ? '📄' : '📎'} {a.filename}
+                </a>
+                <a href={`api/documents/${id}/attachments/${a.id}`} download={a.filename} title="Download">⤓</a>
+              </span>
+            ))}
+            <label className="btn ghost sm" style={{ cursor: 'pointer' }}>
+              + Attach file
+              <input type="file" style={{ display: 'none' }}
+                     onChange={e => { if (e.target.files?.[0]) { uploadFile(e.target.files[0]); e.target.value = ''; } }} />
+            </label>
+          </div>
+          {previewId && attachments.some(a => a.id === previewId) && (
+            <iframe title="attachment preview"
+                    src={`api/documents/${id}/attachments/${previewId}`}
+                    style={{ width: '100%', height: 560, border: '1px solid var(--line)', borderRadius: 8, margin: '4px 0 8px', background: '#fff' }} />
+          )}
+
           {doc.content_schema.sections.map(s => (
             <SectionBlock key={s.key} section={s}
               value={shown[s.key]}
               readOnly={readOnly}
               flash={flashKeys.has(s.key)}
+              hl={highlight?.section === s.key ? highlight : null}
               openComments={openThreads.filter(c => c.section_key === s.key)}
               onChange={v => edit({ ...content, [s.key]: v })}
               onComment={(row) => setCommentDraft({ section: s.key, row })}
@@ -241,25 +302,32 @@ export default function DocumentEditor({ id, me }) {
         </div>
 
         <aside className="rail">
-          <div className="rail-title">
-            <span>Comments {openThreads.length > 0 && `(${openThreads.length} open)`}</span>
-            <button className="btn ghost sm" onClick={() => setShowResolved(v => !v)}>
-              {showResolved ? 'hide resolved' : 'show resolved'}
-            </button>
+          <div className="rail-title" style={{ cursor: 'pointer' }} onClick={() => setRailComments(v => !v)}>
+            <span>{railComments ? '▾' : '▸'} Comments {openThreads.length > 0 && `(${openThreads.length} open)`}</span>
+            {railComments && (
+              <button className="btn ghost sm" onClick={e => { e.stopPropagation(); setShowResolved(v => !v); }}>
+                {showResolved ? 'hide resolved' : 'show resolved'}
+              </button>
+            )}
           </div>
-          {shownThreads.length === 0 && (
+          {railComments && shownThreads.length === 0 && (
             <div className="muted small" style={{ padding: '6px 4px' }}>
               No comments. Hover a section title and click 💬 to start a thread.
             </div>
           )}
-          {shownThreads.map(c => (
+          {railComments && shownThreads.map(c => (
             <Thread key={c.id} root={c}
                     replies={doc.comments.filter(r => r.parent_id === c.id)}
                     sections={doc.content_schema.sections}
                     onReply={body => replyComment(c, body)}
-                    onResolve={() => resolveComment(c)} />
+                    onResolve={() => resolveComment(c)}
+                    onHover={on => setHighlight(on ? { section: c.section_key, row: c.row_index } : null)}
+                    onJump={() => jumpTo(c.section_key, c.row_index)} />
           ))}
-          <ActivityFeed id={id} stamp={doc.latest_updated_at} />
+          <div className="rail-title" style={{ cursor: 'pointer', marginTop: 12 }} onClick={() => setRailActivity(v => !v)}>
+            <span>{railActivity ? '▾' : '▸'} Activity</span>
+          </div>
+          {railActivity && <ActivityFeed id={id} stamp={doc.latest_updated_at} />}
         </aside>
       </div>
 
@@ -276,9 +344,11 @@ export default function DocumentEditor({ id, me }) {
 
 /* ================= sections ================= */
 
-function SectionBlock({ section, value, readOnly, flash, openComments, onChange, onComment }) {
+function SectionBlock({ section, value, readOnly, flash, hl, openComments, onChange, onComment }) {
+  const sectionHl = hl && (hl.row === null || hl.row === undefined);
   return (
-    <div className={`section ${flash ? 'flash' : ''}`}>
+    <div id={`sec-${section.key}`}
+         className={`section ${flash ? 'flash' : ''} ${sectionHl ? 'anchor-hl' : ''}`}>
       <div className="section-head">
         <h3>{section.title}</h3>
         {openComments.length > 0 && (
@@ -290,6 +360,7 @@ function SectionBlock({ section, value, readOnly, flash, openComments, onChange,
       {section.type === 'text'
         ? <ProseArea value={value || ''} readOnly={readOnly} onChange={onChange} />
         : <GridTable section={section} rows={value || []} readOnly={readOnly}
+                     hlRow={hl && hl.row !== null && hl.row !== undefined ? hl.row : -1}
                      onChange={onChange} onCommentRow={onComment} />}
     </div>
   );
@@ -308,7 +379,7 @@ function ProseArea({ value, readOnly, onChange }) {
   );
 }
 
-function GridTable({ section, rows, readOnly, onChange, onCommentRow }) {
+function GridTable({ section, rows, readOnly, hlRow = -1, onChange, onCommentRow }) {
   const cols = section.columns || [];
 
   function setCell(ri, key, v) {
@@ -341,7 +412,8 @@ function GridTable({ section, rows, readOnly, onChange, onCommentRow }) {
             </td></tr>
           )}
           {rows.map((r, ri) => (
-            <tr key={ri}>
+            <tr key={ri} id={`sec-${section.key}-row-${ri}`}
+                className={ri === hlRow ? 'row-hl' : ''}>
               {cols.map(c => (
                 <td key={c.key} className={c.type === 'number' ? 'num' : ''}>
                   <input value={String(r[c.key] ?? '')} readOnly={readOnly}
@@ -369,13 +441,14 @@ function GridTable({ section, rows, readOnly, onChange, onCommentRow }) {
 
 /* ================= comments ================= */
 
-function Thread({ root, replies, sections, onReply, onResolve }) {
+function Thread({ root, replies, sections, onReply, onResolve, onHover, onJump }) {
   const [reply, setReply] = useState('');
   const title = sections.find(s => s.key === root.section_key)?.title || root.section_key;
   return (
-    <div className={`thread ${root.status === 'resolved' ? 'resolved' : ''}`}>
-      <span className="anchor">
-        {title}{root.row_index !== null ? ` · row ${root.row_index + 1}` : ''}
+    <div className={`thread ${root.status === 'resolved' ? 'resolved' : ''}`}
+         onMouseEnter={() => onHover?.(true)} onMouseLeave={() => onHover?.(false)}>
+      <span className="anchor" title="Go to this section" onClick={onJump}>
+        {title}{root.row_index !== null ? ` · row ${root.row_index + 1}` : ''} ↗
       </span>
       <Msg c={root} />
       {replies.map(r => <Msg key={r.id} c={r} />)}

@@ -301,3 +301,17 @@ h2.subtitle { font-size: 12px; font-weight: 600; letter-spacing: .09em; text-tra
 /* assistant edit flash */
 @keyframes flash { 0% { background: #fff3e6; } 100% { background: transparent; } }
 .flash { animation: flash 2.2s ease-out; }
+
+/* comment anchor highlighting (hover a thread / click its anchor) */
+.section.anchor-hl { background: var(--warn-bg); outline: 2px solid #fcd34d; outline-offset: -2px; border-radius: 8px; transition: background .15s; }
+tr.row-hl td { background: var(--warn-bg); }
+tr.row-hl td input { background: transparent; }
+
+/* attachment chips */
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 1px solid var(--line); border-radius: 8px; background: #f8fafd;
+  padding: 4px 10px; font-size: 12.5px;
+}
+.attach-chip a { color: var(--ink-soft); text-decoration: none; }
+.attach-chip a:hover { color: var(--accent); }
