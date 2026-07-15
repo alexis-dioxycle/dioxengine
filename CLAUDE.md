@@ -163,11 +163,12 @@ MCP `sharepoint_sync_project` / `sharepoint_status`, ⇅ button on the project
 page (report modal). Auth: Entra client credentials, Sites.Selected
 application permission granted per site — secrets MS_TENANT_ID /
 MS_CLIENT_ID / MS_CLIENT_SECRET / SHAREPOINT_SITE
-(`dioxycle.sharepoint.com:/sites/engineering`); local dev reads
-`backend/.env` (gitignored). Manifest egress: login.microsoftonline.com +
-graph.microsoft.com. STATE: credentials verified live (token OK, site
-exists) — waiting on Bastien's Sites.Selected grant on /sites/engineering
-(status endpoint currently returns the 403 hint).
+(`dioxycle.sharepoint.com:/sites/1tonperdaypilot` — display name "Path to
+FOAK"); local dev reads `backend/.env` (gitignored). Manifest egress:
+login.microsoftonline.com + graph.microsoft.com. STATE: verified live
+end-to-end (2026-07-15): token, site lookup, file write + read-back +
+delete on the real site all OK. Remaining for prod: set the 4 secrets on
+the app's portal page + allow the egress at review, upload the zip.
 
 ## Status (2026-07-15) & next steps
 

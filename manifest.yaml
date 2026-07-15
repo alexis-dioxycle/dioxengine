@@ -13,7 +13,7 @@ secrets:
   - MS_TENANT_ID      # Entra tenant (SharePoint sync, client credentials)
   - MS_CLIENT_ID      # Entra app registration (Sites.Selected application permission)
   - MS_CLIENT_SECRET  # Entra client secret
-  - SHAREPOINT_SITE   # e.g. dioxycle.sharepoint.com:/sites/engineering
+  - SHAREPOINT_SITE   # e.g. dioxycle.sharepoint.com:/sites/1tonperdaypilot
 allowed_egress:
   - login.microsoftonline.com   # Entra token endpoint
   - graph.microsoft.com         # Microsoft Graph (SharePoint drive)
