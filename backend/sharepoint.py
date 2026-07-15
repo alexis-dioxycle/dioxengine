@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 
-from models import Attachment, SharePointLink
+from models import Attachment, Document, SharePointLink
 import doc_service as svc
 import renderers
 
@@ -190,6 +190,13 @@ def folder_web_url(path: str) -> str:
 
 # ------------------------------------------------------------------- sync
 
+class _Actor:
+    """Minimal acting-user for doc_service (only .email is read). Used to
+    attribute a pull to whoever edited the file on SharePoint."""
+    def __init__(self, email: str):
+        self.email = email
+
+
 def _safe(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|#%]', "_", name).strip() or "file"
 
@@ -256,27 +263,36 @@ def sync_document(db, doc, me, folder: str) -> dict:
                               f"{head.status} - approved documents are not pulled"}
         data = _download(link.drive_item_id)
         modifier = (item.get("lastModifiedBy", {}).get("user", {}) or {}).get("email", "")
+        # the draft belongs to whoever edited the file on SharePoint
+        actor = _Actor(modifier) if modifier else me
         if kind == "attachment":
             att.data = data
             att.size_bytes = len(data)
-            svc.log(db, document=doc, actor_email=modifier or me.email, actor_kind="user",
+            svc.log(db, document=doc, actor_email=actor.email, actor_kind="user",
                     action="sharepoint_pull", payload={"filename": file_name})
         else:
             parse = renderers.parse_xlsx if kind == "xlsx" else renderers.parse_docx
             content = parse(data, doc.node.content_schema or {})
-            draft = svc.save_draft(db, doc, me, content, actor_kind="user")
-            svc.log(db, document=doc, actor_email=modifier or me.email, actor_kind="user",
+            draft = svc.save_draft(db, doc, actor, content, actor_kind="user")
+            svc.log(db, document=doc, actor_email=actor.email, actor_kind="user",
                     action="sharepoint_pull", payload={"filename": file_name})
             head = draft
         link.etag = item.get("eTag", "")
         link.pushed_stamp = _local_stamp(kind, head, att)
         link.last_pulled_at = datetime.utcnow()
+        link.conflict_etag = ""
         db.commit()
         return {"document": name, "action": "pulled",
                 "detail": f"updated from {file_name}" + (f" (edited by {modifier})" if modifier else "")}
 
-    # ---- conflict: both sides moved - touch nothing
+    # ---- conflict: both sides moved - touch nothing, log it once per remote rev
     if link and remote_changed and local_changed:
+        remote_etag = item.get("eTag", "")
+        if link.conflict_etag != remote_etag:
+            link.conflict_etag = remote_etag
+            svc.log(db, document=doc, actor_email=me.email, actor_kind="assistant",
+                    action="sharepoint_conflict", payload={"filename": file_name})
+            db.commit()
         return {"document": name, "action": "conflict",
                 "detail": f"{file_name} changed on SharePoint AND in the app since the "
                           "last sync - resolve in the app, then sync again to push"}
@@ -327,3 +343,34 @@ def sync_project(db, project, me) -> dict:
             report.append({"document": doc.node.name, "action": "error", "detail": str(detail)})
     return {"ok": True, "folder": folder, "folder_url": folder_web_url(folder),
             "report": report}
+
+
+def sync_all(db) -> dict:
+    """One background polling pass: re-sync every project that has already
+    been synced once (= has SharePoint links). A project opts in through its
+    first manual sync; after that the poller keeps both sides converged with
+    the same conservative rules. Runs as a neutral system actor - pulls are
+    attributed to the SharePoint modifier anyway."""
+    from models import Project
+    if not configured():
+        return {"ok": False, "skipped": "not configured"}
+    linked_project_ids = {
+        d.project_id for d in db.query(Document).join(
+            SharePointLink, SharePointLink.document_id == Document.id).all()
+    }
+    me = _Actor("sharepoint-sync@dioxycle.com")
+    out = {}
+    for pid in sorted(linked_project_ids):
+        p = db.get(Project, pid)
+        if not p:
+            continue
+        try:
+            r = sync_project(db, p, me)
+            acted = [row for row in r.get("report", [])
+                     if row["action"] not in ("up_to_date", "skipped")]
+            if acted:
+                out[p.name] = acted
+        except Exception as e:
+            db.rollback()
+            out[p.name] = [{"action": "error", "detail": str(e)}]
+    return {"ok": True, "projects_checked": len(linked_project_ids), "activity": out}

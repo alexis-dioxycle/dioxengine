@@ -231,6 +231,8 @@ class SharePointLink(Base):
     pushed_stamp = Column(String, default="")
     last_pushed_at = Column(DateTime, nullable=True)
     last_pulled_at = Column(DateTime, nullable=True)
+    # remote etag whose conflict was already logged (poller dedup)
+    conflict_etag = Column(String, default="")
 
 
 class ActivityLog(Base):

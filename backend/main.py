@@ -64,11 +64,49 @@ _mcp_starlette = mcp.streamable_http_app()
 _mcp_asgi_handler = _mcp_starlette.routes[0].endpoint
 
 
+# SharePoint background poller: every SHAREPOINT_SYNC_INTERVAL_S seconds
+# (default 300, 0 disables) re-sync every project that has been synced once,
+# so a Word/Excel edited on SharePoint flows back into a draft within
+# minutes without anyone clicking. Same conservative rules as the manual
+# sync (conflicts logged, approved documents never pulled).
+SYNC_INTERVAL_S = int(os.getenv("SHAREPOINT_SYNC_INTERVAL_S", "300"))
+
+
+def _sharepoint_poll_pass():
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        r = sharepoint.sync_all(db)
+        if r.get("activity"):
+            logger.info("sharepoint poll: %s", r["activity"])
+    finally:
+        db.close()
+
+
+async def _sharepoint_poller():
+    import asyncio
+    while True:
+        await asyncio.sleep(SYNC_INTERVAL_S)
+        try:
+            await asyncio.to_thread(_sharepoint_poll_pass)
+        except Exception:
+            logger.exception("sharepoint poll pass failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
     async with mcp.session_manager.run():
         logger.info("MCP session manager started")
-        yield
+        poller = None
+        if SYNC_INTERVAL_S > 0 and sharepoint.configured():
+            poller = asyncio.create_task(_sharepoint_poller())
+            logger.info("SharePoint poller started (every %ss)", SYNC_INTERVAL_S)
+        try:
+            yield
+        finally:
+            if poller:
+                poller.cancel()
 
 
 app = FastAPI(title="DioXengine", lifespan=lifespan)
