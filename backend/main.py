@@ -1,79 +1,61 @@
-"""DioXengine backend.
+"""DioXengine backend — Dioxycle Apps portal shape.
 
-Routes by area:
-  /health
-  /auth/microsoft/login, /auth/microsoft/callback, /auth/dev-login (ALLOW_DEV_LOGIN=1), /me
-  /users
-  /templates..., /template-versions...
-  /projects...
-  /documents... (draft, submit, review, comments, activity)
-  /mcp + OAuth endpoints (/.well-known/*, /authorize, /oauth/token, /oauth/register)
-  static SPA (built frontend)
+Identity comes from the portal (HMAC-signed headers, see dioxycle_auth.py);
+the app never authenticates anyone. Schema comes from backend/migrations/
+(applied by the portal before boot). Routes:
+  /healthz
+  /api/me, /api/users
+  /api/templates..., /api/template-versions...
+  /api/projects...
+  /api/documents... (draft, submit, review, comments, activity)
+  /api/seed-example
+  static SPA (built frontend) at /
 """
-import base64
-import json
 import logging
-import os
-from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlencode
 
-from dotenv import load_dotenv
-
-load_dotenv()
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-Path("./data").mkdir(exist_ok=True)
-
-from fastapi import Body, Depends, FastAPI, Form, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from starlette.routing import Route as StarletteRoute
 
-from database import Base, SessionLocal, engine, get_db
+from database import IS_LOCAL_DEV, Base, engine, get_db
+from dioxycle_auth import DioxycleUser, current_user
 from models import (
-    ActivityLog, Comment, Document, DocumentTypeNode, DocumentVersion, Project,
-    ProjectMember, TemplateEdge, TemplateOwner, TemplateUser, TemplateVersion,
-    User, WorkflowTemplate,
+    ActivityLog, Document, DocumentTypeNode, Project, ProjectMember,
+    TemplateEdge, TemplateOwner, TemplateUser, TemplateVersion, User,
+    WorkflowTemplate,
 )
-import auth as auth_mod
 import doc_service as svc
 import seed
-from auth import (
-    ALLOW_DEV_LOGIN, ALLOWED_DOMAIN, APP_URL, create_jwt, exchange_code_for_token,
-    fetch_ms_profile, get_current_user, is_azure_configured,
-    microsoft_authorize_url, upsert_user, upsert_user_from_ms,
-)
-from mcp_server import (
-    MCP_CLIENT_ID, MCP_CLIENT_SECRET, MCPAuthMiddleware, create_auth_code,
-    create_mcp_token, mcp, validate_auth_code,
-)
 
-Base.metadata.create_all(bind=engine)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# ---- MCP wiring ----
-_mcp_starlette = mcp.streamable_http_app()
-_mcp_asgi_handler = _mcp_starlette.routes[0].endpoint
+if IS_LOCAL_DEV:
+    # Local SQLite only. On the portal the schema comes exclusively from
+    # backend/migrations/ — create_all never runs there (DATABASE_URL is set).
+    Path("./data").mkdir(exist_ok=True)
+    Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title="DioXengine")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    async with mcp.session_manager.run():
-        logger.info("MCP session manager started")
-        yield
-
-
-app = FastAPI(title="DioXengine", version="0.1.0", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
-)
-app.router.routes.insert(0, StarletteRoute("/mcp", endpoint=MCPAuthMiddleware(_mcp_asgi_handler)))
+def track_user(user: DioxycleUser = Depends(current_user),
+               db: Session = Depends(get_db)) -> DioxycleUser:
+    """Portal identity is the source of truth; we only record everyone who
+    connects so the app has a directory to grant access from."""
+    u = db.query(User).filter(User.email == user.email).first()
+    if not u:
+        db.add(User(email=user.email, name=user.name or "", role=user.role or ""))
+    else:
+        u.name = user.name or u.name
+        u.role = user.role or u.role
+        u.last_seen = datetime.utcnow()
+    db.commit()
+    return user
 
 
 # ============ payload models ============
@@ -140,107 +122,25 @@ class CommentCreate(BaseModel):
     body: str
 
 
-class DevLogin(BaseModel):
-    email: str
-    name: str = ""
+# ============ health + identity ============
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
 
 
-# ============ health + auth ============
-
-@app.get("/health")
-def health():
-    return {"status": "ok", "azure_configured": is_azure_configured(),
-            "allow_dev_login": ALLOW_DEV_LOGIN}
+@app.get("/api/me")
+def me(user: DioxycleUser = Depends(track_user)):
+    return {"email": user.email, "name": user.name, "role": user.role}
 
 
-def _redirect_uri() -> str:
-    return f"{APP_URL.rstrip('/')}/auth/microsoft/callback"
-
-
-# The MCP authorize flow rides the same Microsoft callback as the web login:
-# Claude's OAuth params tunnel through Microsoft's `state`, prefixed "mcp.".
-def _encode_mcp_state(redirect_uri: str, state: str, code_challenge: str,
-                      code_challenge_method: str) -> str:
-    payload = json.dumps({
-        "redirect_uri": redirect_uri, "state": state,
-        "code_challenge": code_challenge, "code_challenge_method": code_challenge_method,
-    }, separators=(",", ":"))
-    return "mcp." + base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
-
-
-def _decode_mcp_state(s: str) -> Optional[dict]:
-    if not s.startswith("mcp."):
-        return None
-    try:
-        raw = s[len("mcp."):]
-        raw += "=" * (-len(raw) % 4)
-        return json.loads(base64.urlsafe_b64decode(raw))
-    except Exception:
-        return None
-
-
-@app.get("/auth/microsoft/login")
-def ms_login(redirect_to: str = ""):
-    if not is_azure_configured():
-        raise HTTPException(500, "Azure OAuth not configured (set AZURE_TENANT_ID / AZURE_CLIENT_ID / AZURE_CLIENT_SECRET)")
-    return RedirectResponse(microsoft_authorize_url(_redirect_uri(), redirect_to or "/"))
-
-
-@app.get("/auth/microsoft/callback")
-async def ms_callback(code: str = "", state: str = "", db: Session = Depends(get_db)):
-    if not code:
-        raise HTTPException(400, "Missing authorization code")
-    mcp_params = _decode_mcp_state(state)
-    try:
-        tok = await exchange_code_for_token(code, _redirect_uri())
-        profile = await fetch_ms_profile(tok["access_token"])
-        user = upsert_user_from_ms(db, profile)
-    except HTTPException as e:
-        if mcp_params and mcp_params.get("redirect_uri"):
-            sep = "&" if "?" in mcp_params["redirect_uri"] else "?"
-            err = urlencode({"error": "access_denied", "error_description": str(e.detail),
-                             "state": mcp_params.get("state", "")})
-            return RedirectResponse(f"{mcp_params['redirect_uri']}{sep}{err}")
-        raise
-    except Exception as e:
-        logger.exception("OAuth callback failed")
-        raise HTTPException(500, f"OAuth callback failed: {e}")
-
-    if mcp_params:
-        auth_code = create_auth_code(
-            mcp_params.get("code_challenge", ""), mcp_params.get("code_challenge_method", "S256"),
-            mcp_params["redirect_uri"], user.id)
-        params = {"code": auth_code}
-        if mcp_params.get("state"):
-            params["state"] = mcp_params["state"]
-        sep = "&" if "?" in mcp_params["redirect_uri"] else "?"
-        return RedirectResponse(f"{mcp_params['redirect_uri']}{sep}{urlencode(params)}")
-
-    jwt_token = create_jwt(user)
-    target = state if state.startswith("/") else "/"
-    return RedirectResponse(f"{APP_URL}/#/auth/callback?token={jwt_token}&next={target}")
-
-
-@app.post("/auth/dev-login")
-def dev_login(body: DevLogin, db: Session = Depends(get_db)):
-    if not ALLOW_DEV_LOGIN:
-        raise HTTPException(403, "Dev login is disabled")
-    user = upsert_user(db, body.email, body.name)
-    return {"access_token": create_jwt(user), "token_type": "bearer",
-            "user": {"id": user.id, "email": user.email, "name": user.name}}
-
-
-@app.get("/me")
-def me(user: User = Depends(get_current_user)):
-    return {"id": user.id, "email": user.email, "name": user.name, "role": user.role}
-
-
-@app.get("/users")
-def list_users(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Directory of everyone who has signed in (backs owner/member pickers).
-    Access can still be granted to an email that hasn't logged in yet."""
+@app.get("/api/users")
+def list_users(user: DioxycleUser = Depends(track_user), db: Session = Depends(get_db)):
+    """Directory of everyone who has connected via the portal (backs the
+    owner/member pickers). Access can still be granted to an email that
+    hasn't connected yet."""
     return [{"email": u.email, "name": u.name}
-            for u in db.query(User).filter(User.is_active == True).order_by(User.email).all()]
+            for u in db.query(User).order_by(User.email).all()]
 
 
 # ============ templates ============
@@ -258,8 +158,8 @@ def _node_public(n: DocumentTypeNode) -> dict:
             "receiver_roles": n.receiver_roles or []}
 
 
-@app.get("/templates")
-def list_templates(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+@app.get("/api/templates")
+def list_templates(user: DioxycleUser = Depends(track_user), db: Session = Depends(get_db)):
     out = []
     for t in db.query(WorkflowTemplate).order_by(WorkflowTemplate.id.desc()).all():
         owners = svc.template_owners(db, t.id)
@@ -274,8 +174,8 @@ def list_templates(user: User = Depends(get_current_user), db: Session = Depends
     return out
 
 
-@app.post("/templates")
-def create_template(body: TemplateCreate, user: User = Depends(get_current_user),
+@app.post("/api/templates")
+def create_template(body: TemplateCreate, user: DioxycleUser = Depends(track_user),
                     db: Session = Depends(get_db)):
     t = WorkflowTemplate(name=body.name, description=body.description, created_by=user.email)
     db.add(t)
@@ -287,8 +187,8 @@ def create_template(body: TemplateCreate, user: User = Depends(get_current_user)
     return {"template_id": t.id, "template_version_id": tv.id}
 
 
-@app.post("/templates/{template_id}/versions")
-def new_template_version(template_id: int, user: User = Depends(get_current_user),
+@app.post("/api/templates/{template_id}/versions")
+def new_template_version(template_id: int, user: DioxycleUser = Depends(track_user),
                          db: Session = Depends(get_db)):
     svc.require_template_access(db, template_id, user, need_owner=True)
     src = (db.query(TemplateVersion).filter(TemplateVersion.template_id == template_id)
@@ -318,8 +218,8 @@ def new_template_version(template_id: int, user: User = Depends(get_current_user
     return {"template_version_id": tv.id, "version_number": nxt}
 
 
-@app.get("/template-versions/{tvid}")
-def get_template_version(tvid: int, user: User = Depends(get_current_user),
+@app.get("/api/template-versions/{tvid}")
+def get_template_version(tvid: int, user: DioxycleUser = Depends(track_user),
                          db: Session = Depends(get_db)):
     tv = db.get(TemplateVersion, tvid)
     if not tv:
@@ -340,9 +240,9 @@ def get_template_version(tvid: int, user: User = Depends(get_current_user),
     }
 
 
-@app.put("/template-versions/{tvid}")
+@app.put("/api/template-versions/{tvid}")
 def update_template_version(tvid: int, body: GraphPayload,
-                            user: User = Depends(get_current_user),
+                            user: DioxycleUser = Depends(track_user),
                             db: Session = Depends(get_db)):
     tv = db.get(TemplateVersion, tvid)
     if not tv:
@@ -361,10 +261,9 @@ def update_template_version(tvid: int, body: GraphPayload,
     return {"ok": True}
 
 
-@app.post("/template-versions/{tvid}/publish")
-def publish_template_version(tvid: int, user: User = Depends(get_current_user),
+@app.post("/api/template-versions/{tvid}/publish")
+def publish_template_version(tvid: int, user: DioxycleUser = Depends(track_user),
                              db: Session = Depends(get_db)):
-    from datetime import datetime
     tv = db.get(TemplateVersion, tvid)
     if not tv:
         raise HTTPException(404, "Template version not found")
@@ -379,8 +278,8 @@ def publish_template_version(tvid: int, user: User = Depends(get_current_user),
     return {"ok": True}
 
 
-@app.delete("/template-versions/{tvid}")
-def delete_template_version(tvid: int, user: User = Depends(get_current_user),
+@app.delete("/api/template-versions/{tvid}")
+def delete_template_version(tvid: int, user: DioxycleUser = Depends(track_user),
                             db: Session = Depends(get_db)):
     tv = db.get(TemplateVersion, tvid)
     if not tv:
@@ -397,17 +296,17 @@ def delete_template_version(tvid: int, user: User = Depends(get_current_user),
     return {"ok": True}
 
 
-@app.get("/templates/{tid}/access")
-def get_template_access(tid: int, user: User = Depends(get_current_user),
+@app.get("/api/templates/{tid}/access")
+def get_template_access(tid: int, user: DioxycleUser = Depends(track_user),
                         db: Session = Depends(get_db)):
     is_owner = svc.require_template_access(db, tid, user)
     return {"owners": svc.template_owners(db, tid),
             "users": svc.template_users(db, tid), "is_owner": is_owner}
 
 
-@app.put("/templates/{tid}/access")
+@app.put("/api/templates/{tid}/access")
 def set_template_access(tid: int, body: AccessUpdate,
-                        user: User = Depends(get_current_user),
+                        user: DioxycleUser = Depends(track_user),
                         db: Session = Depends(get_db)):
     svc.require_template_access(db, tid, user, need_owner=True)
     owners = svc._norm_emails(body.owners)
@@ -426,8 +325,8 @@ def set_template_access(tid: int, body: AccessUpdate,
 
 # ============ projects ============
 
-@app.get("/projects")
-def list_projects(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+@app.get("/api/projects")
+def list_projects(user: DioxycleUser = Depends(track_user), db: Session = Depends(get_db)):
     out = []
     for p in db.query(Project).order_by(Project.id.desc()).all():
         members = svc.project_members(db, p.id)
@@ -446,8 +345,8 @@ def list_projects(user: User = Depends(get_current_user), db: Session = Depends(
     return out
 
 
-@app.post("/projects")
-def create_project(body: ProjectCreate, user: User = Depends(get_current_user),
+@app.post("/api/projects")
+def create_project(body: ProjectCreate, user: DioxycleUser = Depends(track_user),
                    db: Session = Depends(get_db)):
     tv = db.get(TemplateVersion, body.template_version_id)
     if not tv:
@@ -469,8 +368,8 @@ def create_project(body: ProjectCreate, user: User = Depends(get_current_user),
     return {"project_id": p.id}
 
 
-@app.get("/projects/{pid}")
-def get_project(pid: int, user: User = Depends(get_current_user),
+@app.get("/api/projects/{pid}")
+def get_project(pid: int, user: DioxycleUser = Depends(track_user),
                 db: Session = Depends(get_db)):
     p = svc.require_project_member(db, pid, user)
     edges = db.query(TemplateEdge).filter_by(template_version_id=p.template_version_id).all()
@@ -488,8 +387,8 @@ def get_project(pid: int, user: User = Depends(get_current_user),
     }
 
 
-@app.delete("/projects/{pid}")
-def delete_project(pid: int, user: User = Depends(get_current_user),
+@app.delete("/api/projects/{pid}")
+def delete_project(pid: int, user: DioxycleUser = Depends(track_user),
                    db: Session = Depends(get_db)):
     p = svc.require_project_member(db, pid, user)
     if p.created_by != user.email:
@@ -500,17 +399,17 @@ def delete_project(pid: int, user: User = Depends(get_current_user),
     return {"ok": True}
 
 
-@app.get("/projects/{pid}/members")
-def get_project_members(pid: int, user: User = Depends(get_current_user),
+@app.get("/api/projects/{pid}/members")
+def get_project_members(pid: int, user: DioxycleUser = Depends(track_user),
                         db: Session = Depends(get_db)):
     p = svc.require_project_member(db, pid, user)
     return {"members": svc.project_members(db, pid), "created_by": p.created_by,
             "can_manage_members": p.created_by == user.email}
 
 
-@app.put("/projects/{pid}/members")
+@app.put("/api/projects/{pid}/members")
 def set_project_members(pid: int, body: MembersUpdate,
-                        user: User = Depends(get_current_user),
+                        user: DioxycleUser = Depends(track_user),
                         db: Session = Depends(get_db)):
     p = svc.require_project_member(db, pid, user)
     if p.created_by != user.email:
@@ -527,8 +426,8 @@ def set_project_members(pid: int, body: MembersUpdate,
 
 # ============ documents ============
 
-@app.get("/documents/{did}")
-def get_document(did: int, user: User = Depends(get_current_user),
+@app.get("/api/documents/{did}")
+def get_document(did: int, user: DioxycleUser = Depends(track_user),
                  db: Session = Depends(get_db)):
     doc = svc.get_document_or_404(db, did, user)
     head = svc.latest_version(doc)
@@ -553,8 +452,8 @@ def get_document(did: int, user: User = Depends(get_current_user),
     }
 
 
-@app.get("/documents/{did}/versions/{n}")
-def get_document_version(did: int, n: int, user: User = Depends(get_current_user),
+@app.get("/api/documents/{did}/versions/{n}")
+def get_document_version(did: int, n: int, user: DioxycleUser = Depends(track_user),
                          db: Session = Depends(get_db)):
     doc = svc.get_document_or_404(db, did, user)
     v = next((v for v in doc.versions if v.version_number == n), None)
@@ -563,9 +462,9 @@ def get_document_version(did: int, n: int, user: User = Depends(get_current_user
     return svc.version_public(v, with_content=True)
 
 
-@app.put("/documents/{did}/assignments")
+@app.put("/api/documents/{did}/assignments")
 def update_assignments(did: int, body: AssignmentsUpdate,
-                       user: User = Depends(get_current_user),
+                       user: DioxycleUser = Depends(track_user),
                        db: Session = Depends(get_db)):
     doc = svc.get_document_or_404(db, did, user)
     doc.author_email = body.author_email.strip()
@@ -575,8 +474,8 @@ def update_assignments(did: int, body: AssignmentsUpdate,
     return {"ok": True}
 
 
-@app.put("/documents/{did}/draft")
-def save_draft(did: int, body: DraftUpdate, user: User = Depends(get_current_user),
+@app.put("/api/documents/{did}/draft")
+def save_draft(did: int, body: DraftUpdate, user: DioxycleUser = Depends(track_user),
                db: Session = Depends(get_db)):
     doc = svc.get_document_or_404(db, did, user)
     draft = svc.save_draft(db, doc, user, body.content)
@@ -584,26 +483,26 @@ def save_draft(did: int, body: DraftUpdate, user: User = Depends(get_current_use
             "updated_at": draft.updated_at.isoformat() if draft.updated_at else None}
 
 
-@app.post("/documents/{did}/submit")
-def submit_document(did: int, user: User = Depends(get_current_user),
+@app.post("/api/documents/{did}/submit")
+def submit_document(did: int, user: DioxycleUser = Depends(track_user),
                     db: Session = Depends(get_db)):
     doc = svc.get_document_or_404(db, did, user)
     v = svc.submit(db, doc, user)
     return {"version_number": v.version_number, "status": v.status}
 
 
-@app.post("/documents/{did}/review")
+@app.post("/api/documents/{did}/review")
 def review_document(did: int, body: ReviewDecision,
-                    user: User = Depends(get_current_user),
+                    user: DioxycleUser = Depends(track_user),
                     db: Session = Depends(get_db)):
     doc = svc.get_document_or_404(db, did, user)
     v = svc.review(db, doc, user, body.decision, body.comment)
     return {"version_number": v.version_number, "status": v.status}
 
 
-@app.post("/documents/{did}/comments")
+@app.post("/api/documents/{did}/comments")
 def create_comment(did: int, body: CommentCreate,
-                   user: User = Depends(get_current_user),
+                   user: DioxycleUser = Depends(track_user),
                    db: Session = Depends(get_db)):
     doc = svc.get_document_or_404(db, did, user)
     c = svc.add_comment(db, doc, user, body.section_key, body.body,
@@ -611,17 +510,17 @@ def create_comment(did: int, body: CommentCreate,
     return svc.comment_public(c)
 
 
-@app.post("/documents/{did}/comments/{cid}/resolve")
-def resolve_comment(did: int, cid: int, user: User = Depends(get_current_user),
+@app.post("/api/documents/{did}/comments/{cid}/resolve")
+def resolve_comment(did: int, cid: int, user: DioxycleUser = Depends(track_user),
                     db: Session = Depends(get_db)):
     doc = svc.get_document_or_404(db, did, user)
     c = svc.resolve_comment(db, doc, user, cid)
     return svc.comment_public(c)
 
 
-@app.get("/documents/{did}/activity")
+@app.get("/api/documents/{did}/activity")
 def document_activity(did: int, limit: int = Query(50, le=200),
-                      user: User = Depends(get_current_user),
+                      user: DioxycleUser = Depends(track_user),
                       db: Session = Depends(get_db)):
     svc.get_document_or_404(db, did, user)
     rows = (db.query(ActivityLog).filter(ActivityLog.document_id == did)
@@ -632,137 +531,16 @@ def document_activity(did: int, limit: int = Query(50, le=200),
             for r in rows]
 
 
-@app.post("/seed-example")
-def seed_example(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+@app.post("/api/seed-example")
+def seed_example(user: DioxycleUser = Depends(track_user), db: Session = Depends(get_db)):
     t = seed.seed_example(db, owner_email=user.email)
     if t is None:
         raise HTTPException(409, "Example template already exists")
     return {"template_id": t.id}
 
 
-# ============ MCP OAuth endpoints ============
-
-def _public_base_url(request: Request) -> str:
-    # Behind Render's proxy request.base_url is http://; APP_URL is the truth.
-    if APP_URL and APP_URL.startswith("http"):
-        return APP_URL.rstrip("/")
-    return str(request.base_url).rstrip("/")
-
-
-@app.get("/.well-known/oauth-protected-resource")
-def oauth_protected_resource(request: Request):
-    base_url = _public_base_url(request)
-    return {"resource": f"{base_url}/mcp", "authorization_servers": [base_url],
-            "bearer_methods_supported": ["header"]}
-
-
-@app.get("/.well-known/oauth-authorization-server")
-def oauth_metadata(request: Request):
-    base_url = _public_base_url(request)
-    return {
-        "issuer": base_url,
-        "authorization_endpoint": f"{base_url}/authorize",
-        "token_endpoint": f"{base_url}/oauth/token",
-        "registration_endpoint": f"{base_url}/oauth/register",
-        "token_endpoint_auth_methods_supported": ["client_secret_post"],
-        "grant_types_supported": ["authorization_code"],
-        "response_types_supported": ["code"],
-        "code_challenge_methods_supported": ["S256"],
-    }
-
-
-@app.post("/oauth/register")
-def oauth_register():
-    return {
-        "client_id": MCP_CLIENT_ID,
-        "client_secret": MCP_CLIENT_SECRET,
-        "grant_types": ["authorization_code"],
-        "response_types": ["code"],
-        "token_endpoint_auth_method": "client_secret_post",
-    }
-
-
-@app.get("/authorize")
-def oauth_authorize(
-    request: Request,
-    response_type: str = Query(...),
-    client_id: str = Query(...),
-    redirect_uri: str = Query(...),
-    state: str = Query(""),
-    code_challenge: str = Query(""),
-    code_challenge_method: str = Query("S256"),
-    scope: str = Query(""),
-):
-    import html as html_lib
-    if response_type != "code":
-        raise HTTPException(400, "unsupported_response_type")
-    if MCP_CLIENT_ID and client_id != MCP_CLIENT_ID:
-        raise HTTPException(400, "invalid_client_id")
-    if not is_azure_configured():
-        raise HTTPException(500, "Microsoft OAuth is not configured; the MCP connector requires it")
-    ms_state = _encode_mcp_state(redirect_uri, state, code_challenge, code_challenge_method)
-    ms_url = html_lib.escape(microsoft_authorize_url(_redirect_uri(), ms_state), quote=True)
-    return HTMLResponse(f"""<!DOCTYPE html>
-<html><head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Connect to DioXengine</title>
-<style>
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; display:flex; justify-content:center; align-items:center; min-height:100vh; margin:0; background:#f8fafc; }}
-  .card {{ background:white; border-radius:12px; padding:40px; max-width:420px; width:100%; box-shadow:0 4px 24px rgba(0,0,0,0.08); text-align:center; }}
-  h1 {{ font-size:22px; color:#1e293b; margin-bottom:8px; }}
-  p {{ color:#64748b; margin-bottom:24px; line-height:1.5; font-size:14px; }}
-  .msbtn {{ display:flex; align-items:center; justify-content:center; gap:10px; border:1px solid #cbd5e1; border-radius:8px; padding:12px; font-size:15px; font-weight:500; color:#334155; text-decoration:none; }}
-  .msbtn:hover {{ background:#f8fafc; }}
-</style></head><body>
-<div class="card">
-  <h1>Connect Claude to DioXengine</h1>
-  <p>Sign in with your <strong>@{ALLOWED_DOMAIN}</strong> Microsoft account to let Claude read and edit engineering documents on your behalf.</p>
-  <a class="msbtn" href="{ms_url}">
-    <svg width="18" height="18" viewBox="0 0 21 21" aria-hidden="true">
-      <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
-      <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
-      <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
-      <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
-    </svg>
-    Sign in with Microsoft
-  </a>
-</div></body></html>""")
-
-
-@app.post("/oauth/token")
-def oauth_token(
-    grant_type: str = Form(...),
-    code: str = Form(""),
-    redirect_uri: str = Form(""),
-    code_verifier: str = Form(""),
-    client_id: str = Form(""),
-    client_secret: str = Form(""),
-    db: Session = Depends(get_db),
-):
-    if grant_type != "authorization_code":
-        raise HTTPException(400, "unsupported_grant_type")
-    if MCP_CLIENT_ID:
-        if client_id != MCP_CLIENT_ID or client_secret != MCP_CLIENT_SECRET:
-            raise HTTPException(401, "invalid_client")
-    auth_data = validate_auth_code(code, code_verifier, redirect_uri)
-    if not auth_data:
-        raise HTTPException(400, "invalid_grant")
-    user = db.query(User).filter(User.id == auth_data["user_id"]).first()
-    if not user or not user.is_active:
-        raise HTTPException(400, "user_not_active")
-    return {"access_token": create_mcp_token(user.id), "token_type": "Bearer",
-            "expires_in": 3600}
-
-
-# ============ static frontend ============
+# ============ static frontend (mounted after all API routes) ============
 
 _static_dir = Path(__file__).parent / "static"
 if _static_dir.exists():
-    app.mount("/assets", StaticFiles(directory=_static_dir / "assets"), name="assets")
-
-    @app.get("/{full_path:path}")
-    def spa(full_path: str):
-        index = _static_dir / "index.html"
-        if index.exists():
-            return FileResponse(index)
-        return JSONResponse({"detail": "Frontend not built"}, status_code=404)
+    app.mount("/", StaticFiles(directory=_static_dir, html=True), name="static")

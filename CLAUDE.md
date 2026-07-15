@@ -2,89 +2,96 @@
 
 ## Project overview
 
-Engineering document workflows for Dioxycle, as a standalone Render app (the
-successor of the apps-portal Phase-1 prototype in `../dioXengine_repo`).
-Workflow templates are versioned DAGs of document types; a project
-instantiates a published version; every node becomes a document with
-versioned, reviewable **structured content** (typed sections: text or table).
-Staleness flags fire when an upstream document gets a newer approved revision.
+Engineering document workflows for Dioxycle, packaged as a **Dioxycle App**
+for the apps.dioxycle.com portal (slug `dioxengine`). Workflow templates are
+versioned DAGs of document types; a project instantiates a published version;
+every node becomes a document with versioned, reviewable **structured
+content** (typed sections: text or table). Staleness flags fire when an
+upstream document gets a newer approved revision. Humans edit in a WYSIWYG
+editor — **JSON never appears in the UI**; Word/Excel are export formats only
+(not built yet).
 
-Claude connects through the built-in MCP server and works inside the same
-draft the humans see: reading upstream documents, filling sections, reading
-and resolving comments. Humans edit in a WYSIWYG editor — **JSON never
-appears in the UI**; Word/Excel are export formats only (Phase next).
+This app is a **sanctioned complexity exception** to the dioxycle-apps size
+guidance (recorded in the dioxycle-apps SKILL.md): it may be large, but every
+other portal rule applies unchanged.
 
-Built to be ≈ identical in stack/feel to finance-dioxycle — copy patterns
-from there when adding features.
+History: first built as a standalone Render app with its own auth and a
+remote MCP server (see git history around commit b7287cd), then converted to
+the portal shape. The MCP server code lives in that history — it comes back
+when the portal grows a way to expose an app endpoint to claude.ai
+(everything on the portal sits behind SSO today, so an external MCP client
+cannot reach it). Until then, "Claude edits" happen through the same REST API
+with `actor_kind='assistant'` plumbing already in place end to end.
 
-## Tech stack
+## Portal contract (the important bits)
 
-- **Backend** — FastAPI + SQLAlchemy + Postgres (prod) / SQLite (local), Python 3.11
-- **Frontend** — React 19 + Vite + TypeScript, hand-rolled CSS (styles.css,
-  IBM Plex Sans/Mono, engineering-register aesthetic; no Tailwind)
-- **Auth** — Microsoft OAuth only in prod (AZURE_* env vars); dev escape hatch
-  `POST /auth/dev-login` gated by ALLOW_DEV_LOGIN=1. JWT sessions.
-- **MCP** — remote HTTP server at /mcp, OAuth 2.0 Authorization Code + PKCE;
-  Claude's OAuth params tunnel through Microsoft's `state` (prefix `mcp.`),
-  the shared /auth/microsoft/callback issues the MCP code. Same as finance.
-- **Deploy** — single Docker container, Render Blueprint (`render.yaml`)
+- Identity: the portal injects HMAC-signed `X-Dioxycle-User` /
+  `X-Dioxycle-Signature` headers; `backend/dioxycle_auth.py` (copied verbatim
+  from the skill) verifies them. **No auth code of our own.** Every non-
+  `/healthz` endpoint depends on `track_user` (which wraps `current_user` and
+  upserts a user directory row).
+- Schema: `backend/migrations/*.sql`, applied by the portal in order. Never
+  edit an applied migration; add `002_*.sql` etc. `create_all()` runs ONLY in
+  local dev (no DATABASE_URL → SQLite) — keep it behind `IS_LOCAL_DEV`.
+- Frontend: no `package.json` in the upload (deps come from the portal's
+  dependency panel baked into `dioxycle-app-base:node20`). The root
+  `package.json` here is a LOCAL DEV mirror of the panel — excluded from the
+  zip. Relative URLs everywhere (`fetch('api/...')`, `base: './'`) because
+  the portal proxies under `/_apps/dioxengine/`.
+- 30 s request budget, port 8000, no subprocess/eval, writes only to `/data`,
+  egress only per manifest (`allowed_egress: []` today).
 
 ## Key files
 
-### Backend
-- `backend/main.py` — all routes (auth, templates, projects, documents,
-  comments, activity, MCP OAuth, SPA)
-- `backend/models.py` — SQLAlchemy models
+- `backend/main.py` — all routes under `/api/*` + `/healthz` + static SPA
 - `backend/doc_service.py` — THE domain layer: access rules, DAG validation,
-  staleness, draft lifecycle, section writes, comments. REST and MCP both go
-  through it; never bypass it.
-- `backend/mcp_server.py` — FastMCP + Bearer middleware + tools
-- `backend/seed.py` — electrolyzer example template (22 nodes / 27 edges),
-  idempotent; also `write_graph` used by the template PUT route
-- `backend/auth.py` — JWT + Microsoft OAuth helpers
-
-### Frontend
-- `App.tsx` — hash router, auth gate, top nav
-- `components/DocumentEditor.tsx` — the WYSIWYG editor: paper sheet, prose
-  textareas, spreadsheet tables, anchored comments rail, autosave (900 ms
-  debounce), 4 s polling that applies external (Claude/MCP) edits when the
-  local state isn't dirty, with an orange flash + toast attribution
-- `components/Project.tsx` — DAG (hand-rolled SVG, longest-path layering) +
-  document list
-- `components/Home.tsx`, `components/Login.tsx`, `utils/api.ts`, `types.ts`
+  staleness, draft lifecycle, section writes vs content_schema, comments,
+  activity log. Every content mutation goes through it; `actor_kind`
+  ('user' | 'assistant') is threaded through for attribution.
+- `backend/models.py`, `backend/migrations/001_initial.sql` — keep in sync:
+  models map the tables, the SQL owns the schema.
+- `backend/seed.py` — electrolyzer example template (22 nodes / 27 edges);
+  also `write_graph` used by the template PUT route.
+- `frontend/src/components/DocumentEditor.jsx` — WYSIWYG editor: paper sheet,
+  prose textareas, spreadsheet tables, anchored resolvable comments rail,
+  autosave (900 ms debounce), 4 s polling that applies external edits when
+  local state isn't dirty (orange flash + toast attribution).
+- `frontend/src/components/Project.jsx` — SVG DAG (longest-path layering) +
+  document list ordered by node_id (template order).
+- `frontend/vite.config.js` — dev server signs the portal identity headers
+  (DIOXYCLE_AUTH_SECRET, default test-secret) so local dev ≈ portal.
 
 ## Domain invariants (don't regress)
 
 - Published template versions are frozen; projects instantiate published only.
 - Document lifecycle: draft → submitted → approved | rejected; approval
-  supersedes the prior approved rev; one open draft at a time; no edits while
-  submitted (409).
-- On submit, `based_on` snapshots upstream approved revs — this powers
-  staleness and provenance; keep it.
-- Content is structured `{section_key: string | rows[]}` validated against the
-  node's content_schema (doc_service.validate_rows). Never opaque blobs.
+  supersedes the prior approved rev; one open draft at a time; 409 while
+  submitted.
+- On submit, `based_on` snapshots upstream approved revs — powers staleness.
+- Content is structured `{section_key: string | rows[]}` validated against
+  the node's content_schema (`doc_service.validate_rows`).
 - Role slots enforce-on-assign: unassigned author/reviewer = anyone may act.
 - Access: template owners/users, project members; hidden resources 404.
-- Every content change goes through doc_service and lands in ActivityLog with
-  actor_kind ('user' | 'assistant') — the UI attribution depends on it.
 
 ## How to run locally
 
 ```bash
-./run.sh        # backend :5006, frontend :3001 (dev login enabled via .env)
+./run.sh        # backend :8000 (SQLite), vite :3001 (signs identity headers)
 ```
 
-Smoke check: sign in with any @dioxycle.com email, click “Seed …”, create a
-project, open a document. MCP tools can be exercised without OAuth locally
-(no MCP_CLIENT_ID → /mcp unauthenticated, tools run as the first user).
+E2E check against real Postgres (validates the migration like the portal
+will): `docker run postgres:16`, apply `001_initial.sql`, boot with
+DATABASE_URL, run the lifecycle. See git log for the exact commands used.
 
-## Don't
+## Packaging
 
-- Don't add npm deps casually — the UI is deliberately dependency-light
-  (react + react-dom only).
-- Don't render JSON to users anywhere; the schema drives forms/tables.
-- Don't let the assistant write outside the draft (submit/review stay
-  human-initiated; submit_document via MCP acts as the authenticated user and
-  must ask first — that's in the tool description).
-- Don't edit applied DB structures casually; SQLite dev DB can be deleted,
-  but prod needs migration thinking (create_all only adds new tables).
+```bash
+npm run build   # sanity-check the frontend compiles
+cd . && zip -r ../dioxengine.zip . \
+  -x '*.DS_Store' 'node_modules/*' 'backend/venv/*' 'backend/data/*' \
+     'frontend/dist/*' 'package.json' 'package-lock.json' 'run.sh' \
+     '.git/*' '.gitignore' 'CLAUDE.md' 'backend/.env' '*/__pycache__/*'
+```
+
+The zip (manifest.yaml at root) is what gets uploaded on the portal's
+**New app** page.

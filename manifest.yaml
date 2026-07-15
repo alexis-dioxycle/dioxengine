@@ -1,0 +1,13 @@
+name: DioXengine
+slug: dioxengine
+description: Engineering document workflows — versioned DAG templates, projects, reviewable structured documents with comments and staleness tracking.
+owner: alexis@dioxycle.com
+
+shape: app
+database: true
+resources:
+  memory_mb: 512
+  cpu: 1.0
+secrets: []
+allowed_egress: []
+visibility: team

@@ -1,23 +1,16 @@
 {
-  "name": "dioxengine",
+  "name": "dioxengine-dev",
   "private": true,
-  "version": "0.1.0",
+  "description": "LOCAL DEV ONLY — mirrors the dioxycle-apps dependency panel. Never shipped: the portal zip excludes this file and node_modules; the portal build uses the panel base image instead.",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3"
+    "dev": "vite --config frontend/vite.config.js frontend",
+    "build": "vite build --config frontend/vite.config.js frontend"
   },
   "devDependencies": {
-    "@types/node": "^22.14.0",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^5.0.0",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "vite": "7.3.5",
+    "@vitejs/plugin-react": "5.2.0"
   }
 }

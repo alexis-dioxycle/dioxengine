@@ -12,9 +12,12 @@ from sqlalchemy.orm import Session
 
 from models import (
     ActivityLog, Comment, Document, DocumentTypeNode, DocumentVersion,
-    Project, ProjectMember, TemplateEdge, TemplateOwner, TemplateUser, User,
+    Project, ProjectMember, TemplateEdge, TemplateOwner, TemplateUser,
     WorkflowTemplate,
 )
+
+# `user` arguments below are the portal's DioxycleUser (dioxycle_auth) —
+# only `.email` is used, so any object with an email attribute works.
 
 
 def _norm_emails(emails):
@@ -49,7 +52,7 @@ def project_members(db: Session, project_id: int) -> list[str]:
             .filter(ProjectMember.project_id == project_id).all()]
 
 
-def require_template_access(db: Session, template_id: int, user: User, *,
+def require_template_access(db: Session, template_id: int, user, *,
                             need_owner: bool = False) -> bool:
     """Returns is_owner. Hidden resources 404; owner-only actions 403."""
     if not db.get(WorkflowTemplate, template_id):
@@ -63,14 +66,14 @@ def require_template_access(db: Session, template_id: int, user: User, *,
     return is_owner
 
 
-def require_project_member(db: Session, project_id: int, user: User) -> Project:
+def require_project_member(db: Session, project_id: int, user) -> Project:
     p = db.get(Project, project_id)
     if not p or not _email_in(user.email, project_members(db, project_id)):
         raise HTTPException(404, "Project not found")
     return p
 
 
-def can_act(assigned_email: str, user: User) -> bool:
+def can_act(assigned_email: str, user) -> bool:
     """Role slots are enforce-on-assign: empty slot = anyone may act."""
     return (not assigned_email) or assigned_email.lower() == user.email.lower()
 
@@ -159,7 +162,7 @@ def log(db: Session, *, document: Document | None = None, project_id: int | None
 
 # ------------------------------------------------------------------ drafts
 
-def get_document_or_404(db: Session, document_id: int, user: User) -> Document:
+def get_document_or_404(db: Session, document_id: int, user) -> Document:
     doc = db.get(Document, document_id)
     if not doc:
         raise HTTPException(404, "Document not found")
@@ -167,7 +170,7 @@ def get_document_or_404(db: Session, document_id: int, user: User) -> Document:
     return doc
 
 
-def open_draft(db: Session, doc: Document, user: User, actor_kind: str = "user") -> DocumentVersion:
+def open_draft(db: Session, doc: Document, user, actor_kind: str = "user") -> DocumentVersion:
     """Return the current draft, creating one (pre-filled from the latest
     content) if the head version is approved/rejected. 409 while submitted."""
     if not can_act(doc.author_email, user):
@@ -212,7 +215,7 @@ def validate_rows(spec: dict, rows: list) -> list:
     return clean
 
 
-def set_section(db: Session, doc: Document, user: User, section_key: str,
+def set_section(db: Session, doc: Document, user, section_key: str,
                 value, actor_kind: str = "user") -> DocumentVersion:
     """Write one section of the current draft (text string or full row list)."""
     spec = section_spec(doc, section_key)
@@ -232,7 +235,7 @@ def set_section(db: Session, doc: Document, user: User, section_key: str,
     return draft
 
 
-def save_draft(db: Session, doc: Document, user: User, content: dict,
+def save_draft(db: Session, doc: Document, user, content: dict,
                actor_kind: str = "user") -> DocumentVersion:
     """Full-content save (web editor autosave)."""
     sections = (doc.node.content_schema or {}).get("sections", [])
@@ -253,7 +256,7 @@ def save_draft(db: Session, doc: Document, user: User, content: dict,
     return draft
 
 
-def submit(db: Session, doc: Document, user: User, actor_kind: str = "user") -> DocumentVersion:
+def submit(db: Session, doc: Document, user, actor_kind: str = "user") -> DocumentVersion:
     if not can_act(doc.author_email, user):
         raise HTTPException(403, "Only the assigned author can submit")
     head = latest_version(doc)
@@ -274,7 +277,7 @@ def submit(db: Session, doc: Document, user: User, actor_kind: str = "user") -> 
     return head
 
 
-def review(db: Session, doc: Document, user: User, decision: str,
+def review(db: Session, doc: Document, user, decision: str,
            comment: str = "", actor_kind: str = "user") -> DocumentVersion:
     if decision not in ("approved", "rejected"):
         raise HTTPException(422, "Decision must be 'approved' or 'rejected'")
@@ -300,7 +303,7 @@ def review(db: Session, doc: Document, user: User, decision: str,
 
 # ---------------------------------------------------------------- comments
 
-def add_comment(db: Session, doc: Document, user: User, section_key: str,
+def add_comment(db: Session, doc: Document, user, section_key: str,
                 body: str, row_index: int | None = None,
                 parent_id: int | None = None, actor_kind: str = "user") -> Comment:
     if not (body or "").strip():
@@ -323,7 +326,7 @@ def add_comment(db: Session, doc: Document, user: User, section_key: str,
     return c
 
 
-def resolve_comment(db: Session, doc: Document, user: User, comment_id: int,
+def resolve_comment(db: Session, doc: Document, user, comment_id: int,
                     actor_kind: str = "user") -> Comment:
     c = db.get(Comment, comment_id)
     if not c or c.document_id != doc.id:

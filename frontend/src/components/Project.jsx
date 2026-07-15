@@ -1,14 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../utils/api';
-import type { DocSummary, Me, ProjectFull } from '../types';
 import { timeAgo } from '../App';
 
-export default function ProjectPage({ id, me }: { id: number; me: Me }) {
-  const [p, setP] = useState<ProjectFull | null>(null);
+export default function ProjectPage({ id, me }) {
+  const [p, setP] = useState(null);
   const [err, setErr] = useState('');
   const [showMembers, setShowMembers] = useState(false);
 
-  const load = () => api.get<ProjectFull>(`/projects/${id}`).then(setP).catch(e => setErr(e.message));
+  const load = () => api.get(`api/projects/${id}`).then(setP).catch(e => setErr(e.message));
   useEffect(() => { load(); }, [id]);
 
   if (err) return <div className="page"><p style={{ color: 'var(--bad)' }}>{err}</p></div>;
@@ -43,14 +42,14 @@ export default function ProjectPage({ id, me }: { id: number; me: Me }) {
   );
 }
 
-function statusOf(d: DocSummary): { cls: string; label: string } {
+function statusOf(d) {
   const s = d.latest?.status;
   if (!s) return { cls: 'empty', label: 'not started' };
   if (s === 'superseded') return { cls: 'approved', label: 'approved' };
   return { cls: s, label: s };
 }
 
-function DocRow({ d }: { d: DocSummary }) {
+function DocRow({ d }) {
   const st = statusOf(d);
   return (
     <a className="rowlink" href={`#/documents/${d.id}`}>
@@ -75,39 +74,39 @@ function DocRow({ d }: { d: DocSummary }) {
 }
 
 /* ---- DAG: topological layers, left → right ---- */
-function Dag({ project }: { project: ProjectFull }) {
+function Dag({ project }) {
   const layout = useMemo(() => {
     const docs = project.documents;
     const byNode = new Map(docs.map(d => [d.node_id, d]));
     const indeg = new Map(docs.map(d => [d.node_id, 0]));
-    const out = new Map<number, number[]>();
+    const out = new Map();
     for (const e of project.edges) {
       indeg.set(e.to_node_id, (indeg.get(e.to_node_id) || 0) + 1);
       out.set(e.from_node_id, [...(out.get(e.from_node_id) || []), e.to_node_id]);
     }
     // longest-path layering
-    const layer = new Map<number, number>();
+    const layer = new Map();
     const q = docs.filter(d => (indeg.get(d.node_id) || 0) === 0).map(d => d.node_id);
     q.forEach(n => layer.set(n, 0));
     const indegW = new Map(indeg);
     const queue = [...q];
     while (queue.length) {
-      const n = queue.shift()!;
+      const n = queue.shift();
       for (const m of out.get(n) || []) {
         layer.set(m, Math.max(layer.get(m) || 0, (layer.get(n) || 0) + 1));
         indegW.set(m, (indegW.get(m) || 0) - 1);
         if ((indegW.get(m) || 0) === 0) queue.push(m);
       }
     }
-    const cols = new Map<number, number[]>();
+    const cols = new Map();
     for (const d of docs) {
       const l = layer.get(d.node_id) || 0;
       cols.set(l, [...(cols.get(l) || []), d.node_id]);
     }
     const W = 168, H = 46, GX = 56, GY = 14;
-    const pos = new Map<number, { x: number; y: number }>();
+    const pos = new Map();
     let maxRows = 0;
-    for (const [l, nodes] of cols) maxRows = Math.max(maxRows, nodes.length);
+    for (const [, nodes] of cols) maxRows = Math.max(maxRows, nodes.length);
     const totalH = maxRows * (H + GY);
     for (const [l, nodes] of [...cols.entries()].sort((a, b) => a[0] - b[0])) {
       const colH = nodes.length * (H + GY) - GY;
@@ -156,7 +155,7 @@ function Dag({ project }: { project: ProjectFull }) {
   );
 }
 
-function Members({ p, onClose, onDone }: { p: ProjectFull; onClose: () => void; onDone: () => void }) {
+function Members({ p, onClose, onDone }) {
   const [emails, setEmails] = useState(p.members.join('\n'));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -164,9 +163,9 @@ function Members({ p, onClose, onDone }: { p: ProjectFull; onClose: () => void; 
   async function save() {
     setBusy(true); setErr('');
     try {
-      await api.put(`/projects/${p.id}/members`, { members: emails.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean) });
+      await api.put(`api/projects/${p.id}/members`, { members: emails.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean) });
       onDone(); onClose();
-    } catch (e: any) { setErr(e.message); setBusy(false); }
+    } catch (e) { setErr(e.message); setBusy(false); }
   }
 
   return (

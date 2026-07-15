@@ -1,23 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../utils/api';
-import type { Me, ProjectSummary, TemplateT } from '../types';
 import { timeAgo } from '../App';
 
-export default function Home({ me }: { me: Me }) {
-  const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
-  const [templates, setTemplates] = useState<TemplateT[] | null>(null);
+export default function Home({ me }) {
+  const [projects, setProjects] = useState(null);
+  const [templates, setTemplates] = useState(null);
   const [creating, setCreating] = useState(false);
   const [err, setErr] = useState('');
 
   const load = () => {
-    api.get<ProjectSummary[]>('/projects').then(setProjects).catch(e => setErr(e.message));
-    api.get<TemplateT[]>('/templates').then(setTemplates).catch(e => setErr(e.message));
+    api.get('api/projects').then(setProjects).catch(e => setErr(e.message));
+    api.get('api/templates').then(setTemplates).catch(e => setErr(e.message));
   };
   useEffect(load, []);
 
   async function seed() {
-    try { await api.post('/seed-example'); load(); }
-    catch (e: any) { setErr(e.message); }
+    try { await api.post('api/seed-example'); load(); }
+    catch (e) { setErr(e.message); }
   }
 
   const published = (templates || []).flatMap(t =>
@@ -96,7 +95,7 @@ export default function Home({ me }: { me: Me }) {
   );
 }
 
-function Progress({ done, total }: { done: number; total: number }) {
+function Progress({ done, total }) {
   const pct = total ? (done / total) * 100 : 0;
   return (
     <div style={{ width: 90, height: 5, borderRadius: 3, background: '#e6eaf2', overflow: 'hidden' }}>
@@ -105,23 +104,21 @@ function Progress({ done, total }: { done: number; total: number }) {
   );
 }
 
-function NewProject({ published, onClose, onDone }:
-  { published: { template: TemplateT; version: { id: number; version_number: number } }[];
-    onClose: () => void; onDone: () => void }) {
+function NewProject({ published, onClose, onDone }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [tv, setTv] = useState(published[0]?.version.id ?? 0);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
-  async function create(e: React.FormEvent) {
+  async function create(e) {
     e.preventDefault();
     setBusy(true); setErr('');
     try {
-      const r = await api.post('/projects', { name, description, template_version_id: tv });
+      const r = await api.post('api/projects', { name, description, template_version_id: tv });
       onDone(); onClose();
       window.location.hash = `#/projects/${r.project_id}`;
-    } catch (e: any) { setErr(e.message); setBusy(false); }
+    } catch (e) { setErr(e.message); setBusy(false); }
   }
 
   return (

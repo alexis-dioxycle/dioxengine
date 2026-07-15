@@ -13,7 +13,7 @@ changed what, human or assistant.
 from datetime import datetime
 
 from sqlalchemy import (
-    JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, Text,
+    JSON, Column, DateTime, ForeignKey, Integer, String, Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
@@ -22,26 +22,16 @@ from database import Base
 
 
 class User(Base):
+    """Directory of everyone who has connected through the portal. The portal
+    is the identity source (see dioxycle_auth); this table only backs the
+    owner/member pickers, upserted on every request."""
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
     email = Column(String, unique=True, index=True, nullable=False)
     name = Column(String, default="")
-    ms_oid = Column(String, nullable=True)
-    role = Column(String, default="employee")  # employee | admin
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    last_login = Column(DateTime, nullable=True)
-
-
-class MCPToken(Base):
-    __tablename__ = "mcp_tokens"
-    token = Column(String, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    expires_at = Column(DateTime, nullable=True)
-    last_used_at = Column(DateTime, nullable=True)
-
-    user = relationship("User")
+    role = Column(String, default="")
+    first_seen = Column(DateTime, default=datetime.utcnow)
+    last_seen = Column(DateTime, default=datetime.utcnow)
 
 
 # ---------------------------------------------------------------- templates

@@ -1,30 +1,24 @@
 import React, { useEffect, useState } from 'react';
-import { api, getToken, setToken, logout } from './utils/api';
-import type { Me } from './types';
-import Login from './components/Login';
+import { api } from './utils/api';
 import Home from './components/Home';
 import ProjectPage from './components/Project';
 import DocumentEditor from './components/DocumentEditor';
 
-export interface Route { name: string; params: Record<string, string> }
-
-function parseHash(): Route {
+function parseHash() {
   const h = window.location.hash.replace(/^#\/?/, '');
   const [path, query] = h.split('?');
-  const params: Record<string, string> = {};
+  const params = {};
   if (query) new URLSearchParams(query).forEach((v, k) => (params[k] = v));
   const seg = path.split('/').filter(Boolean);
-  if (seg[0] === 'login') return { name: 'login', params };
-  if (seg[0] === 'auth' && seg[1] === 'callback') return { name: 'auth-callback', params };
   if (seg[0] === 'projects' && seg[1]) return { name: 'project', params: { ...params, id: seg[1] } };
   if (seg[0] === 'documents' && seg[1]) return { name: 'document', params: { ...params, id: seg[1] } };
   return { name: 'home', params };
 }
 
 export default function App() {
-  const [route, setRoute] = useState<Route>(parseHash());
-  const [me, setMe] = useState<Me | null>(null);
-  const [booting, setBooting] = useState(true);
+  const [route, setRoute] = useState(parseHash());
+  const [me, setMe] = useState(null);
+  const [err, setErr] = useState('');
 
   useEffect(() => {
     const onHash = () => setRoute(parseHash());
@@ -33,22 +27,25 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // OAuth landing: #/auth/callback?token=…&next=…
-    if (route.name === 'auth-callback') {
-      const t = route.params.token;
-      if (t) setToken(t);
-      window.location.hash = route.params.next && route.params.next !== '/' ? `#${route.params.next}` : '#/';
-      return;
-    }
-    if (!getToken()) { setBooting(false); return; }
-    api.get<Me>('/me')
-      .then(setMe)
-      .catch(() => setToken(null))
-      .finally(() => setBooting(false));
-  }, [route.name === 'auth-callback' ? route.params.token : '']);
+    // Identity comes from the portal — if this fails, we're not behind it.
+    api.get('api/me').then(setMe).catch(e => setErr(e.message));
+  }, []);
 
-  if (booting) return null;
-  if (!me) return <Login onLogin={setMe} />;
+  if (err) {
+    return (
+      <div className="login-hero">
+        <div className="card login-card">
+          <div className="logo-lg">D</div>
+          <h1 style={{ fontSize: 20, margin: '0 0 8px' }}>DioXengine</h1>
+          <p className="soft" style={{ fontSize: 13.5 }}>
+            Couldn't verify your Dioxycle identity ({err}).<br />
+            Open this app through <b>apps.dioxycle.com</b>.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (!me) return null;
 
   return (
     <>
@@ -59,16 +56,15 @@ export default function App() {
         </a>
         <div style={{ flex: 1 }} />
         <span className="soft small">{me.name || me.email}</span>
-        <button className="btn ghost sm" onClick={logout}>Sign out</button>
       </nav>
       {route.name === 'project' && <ProjectPage id={Number(route.params.id)} me={me} />}
       {route.name === 'document' && <DocumentEditor id={Number(route.params.id)} me={me} />}
-      {(route.name === 'home' || route.name === 'login') && <Home me={me} />}
+      {route.name === 'home' && <Home me={me} />}
     </>
   );
 }
 
-export function timeAgo(iso: string | null | undefined): string {
+export function timeAgo(iso) {
   if (!iso) return '';
   const d = new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z');
   const s = (Date.now() - d.getTime()) / 1000;
@@ -78,7 +74,7 @@ export function timeAgo(iso: string | null | undefined): string {
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
 
-export function initials(email: string): string {
+export function initials(email) {
   const base = email.split('@')[0];
   const parts = base.split(/[._-]/).filter(Boolean);
   return ((parts[0]?.[0] || '') + (parts[1]?.[0] || parts[0]?.[1] || '')).toUpperCase();

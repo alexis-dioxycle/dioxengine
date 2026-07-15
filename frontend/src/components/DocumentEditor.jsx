@@ -1,45 +1,48 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../utils/api';
-import type { Activity, CommentT, Content, DocFull, Me, Row, Section } from '../types';
 import { initials, timeAgo } from '../App';
 
 /* The document IS the interface: a paper sheet with editable prose and
-   spreadsheet sections. JSON never appears. Claude's MCP edits land in the
-   same draft and show up live via polling, attributed in orange. */
+   spreadsheet sections. JSON never appears. Edits made by the assistant (via
+   the API, actor_kind='assistant') land in the same draft and show up live
+   via polling, attributed in orange. */
 
 const POLL_MS = 4000;
 
-export default function DocumentEditor({ id, me }: { id: number; me: Me }) {
-  const [doc, setDoc] = useState<DocFull | null>(null);
-  const [content, setContent] = useState<Content>({});
+export default function DocumentEditor({ id, me }) {
+  const [doc, setDoc] = useState(null);
+  const [content, setContent] = useState({});
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
   const [toast, setToast] = useState('');
-  const [flashKeys, setFlashKeys] = useState<Set<string>>(new Set());
-  const [commentDraft, setCommentDraft] = useState<{ section: string; row: number | null } | null>(null);
+  const [flashKeys, setFlashKeys] = useState(new Set());
+  const [commentDraft, setCommentDraft] = useState(null);
   const [showResolved, setShowResolved] = useState(false);
-  const [viewVersion, setViewVersion] = useState<number | null>(null); // read-only past rev
-  const [oldContent, setOldContent] = useState<Content | null>(null);
+  const [viewVersion, setViewVersion] = useState(null); // read-only past rev
+  const [oldContent, setOldContent] = useState(null);
 
-  const serverStamp = useRef<string | null>(null);
+  const serverStamp = useRef(null);
   const dirtyRef = useRef(false);
   const savingRef = useRef(false);
   dirtyRef.current = dirty;
   savingRef.current = saving;
 
+  const contentRef = useRef({});
+  contentRef.current = content;
+
   /* ---------- load + poll ---------- */
-  const apply = useCallback((d: DocFull, external: boolean) => {
+  const apply = useCallback((d, external) => {
     setDoc(d);
     if (!dirtyRef.current && !savingRef.current) {
       if (external && serverStamp.current && d.latest_updated_at !== serverStamp.current) {
-        // Something (probably Claude via MCP) changed the draft under us.
+        // Something (assistant or teammate) changed the draft under us.
         const changed = new Set(Object.keys(d.latest_content).filter(
           k => JSON.stringify(d.latest_content[k]) !== JSON.stringify(contentRef.current[k])));
         if (changed.size) {
           setFlashKeys(changed);
           setTimeout(() => setFlashKeys(new Set()), 2300);
-          api.get<Activity[]>(`/documents/${id}/activity?limit=1`).then(a => {
+          api.get(`api/documents/${id}/activity?limit=1`).then(a => {
             const last = a[0];
             if (last?.actor_kind === 'assistant') setToastTimed('Claude updated this document');
             else if (last && last.actor_email !== me.email) setToastTimed(`${last.actor_email.split('@')[0]} updated this document`);
@@ -51,40 +54,37 @@ export default function DocumentEditor({ id, me }: { id: number; me: Me }) {
     }
   }, [id, me.email]);
 
-  const contentRef = useRef<Content>({});
-  contentRef.current = content;
-
   useEffect(() => {
     let alive = true;
-    api.get<DocFull>(`/documents/${id}`).then(d => alive && apply(d, false)).catch(e => setErr(e.message));
+    api.get(`api/documents/${id}`).then(d => alive && apply(d, false)).catch(e => setErr(e.message));
     const t = setInterval(() => {
-      api.get<DocFull>(`/documents/${id}`).then(d => alive && apply(d, true)).catch(() => {});
+      api.get(`api/documents/${id}`).then(d => alive && apply(d, true)).catch(() => {});
     }, POLL_MS);
     return () => { alive = false; clearInterval(t); };
   }, [id, apply]);
 
-  function setToastTimed(msg: string) {
+  function setToastTimed(msg) {
     setToast(msg);
     setTimeout(() => setToast(''), 3500);
   }
 
   /* ---------- autosave ---------- */
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function edit(next: Content) {
+  const saveTimer = useRef(null);
+  function edit(next) {
     setContent(next);
     setDirty(true);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => void save(next), 900);
   }
 
-  async function save(c: Content) {
+  async function save(c) {
     setSaving(true);
     try {
-      const r = await api.put(`/documents/${id}/draft`, { content: c });
+      const r = await api.put(`api/documents/${id}/draft`, { content: c });
       serverStamp.current = r.updated_at;
       setDirty(false);
       setErr('');
-    } catch (e: any) {
+    } catch (e) {
       setErr(e.message);
     } finally { setSaving(false); }
   }
@@ -93,53 +93,50 @@ export default function DocumentEditor({ id, me }: { id: number; me: Me }) {
   async function submit() {
     if (dirty) await save(content);
     try {
-      await api.post(`/documents/${id}/submit`);
-      const d = await api.get<DocFull>(`/documents/${id}`);
-      apply(d, false);
+      await api.post(`api/documents/${id}/submit`);
+      apply(await api.get(`api/documents/${id}`), false);
       setToastTimed('Submitted for review');
-    } catch (e: any) { setErr(e.message); }
+    } catch (e) { setErr(e.message); }
   }
 
-  async function review(decision: 'approved' | 'rejected') {
+  async function review(decision) {
     const comment = decision === 'rejected'
       ? (window.prompt('Reason for rejection (sent to the author):') ?? '') : '';
     if (decision === 'rejected' && comment === null) return;
     try {
-      await api.post(`/documents/${id}/review`, { decision, comment });
-      const d = await api.get<DocFull>(`/documents/${id}`);
-      apply(d, false);
+      await api.post(`api/documents/${id}/review`, { decision, comment });
+      apply(await api.get(`api/documents/${id}`), false);
       setToastTimed(decision === 'approved' ? 'Revision approved' : 'Revision rejected');
-    } catch (e: any) { setErr(e.message); }
+    } catch (e) { setErr(e.message); }
   }
 
-  async function addComment(section: string, row: number | null, body: string) {
+  async function addComment(section, row, body) {
     try {
-      await api.post(`/documents/${id}/comments`, { section_key: section, row_index: row, body });
-      const d = await api.get<DocFull>(`/documents/${id}`);
-      apply(d, false);
+      await api.post(`api/documents/${id}/comments`, { section_key: section, row_index: row, body });
+      apply(await api.get(`api/documents/${id}`), false);
       setCommentDraft(null);
-    } catch (e: any) { setErr(e.message); }
+    } catch (e) { setErr(e.message); }
   }
 
-  async function replyComment(parent: CommentT, body: string) {
+  async function replyComment(parent, body) {
     try {
-      await api.post(`/documents/${id}/comments`, { parent_id: parent.id, body });
-      apply(await api.get<DocFull>(`/documents/${id}`), false);
-    } catch (e: any) { setErr(e.message); }
+      await api.post(`api/documents/${id}/comments`, { parent_id: parent.id, body });
+      apply(await api.get(`api/documents/${id}`), false);
+    } catch (e) { setErr(e.message); }
   }
 
-  async function resolveComment(c: CommentT) {
+  async function resolveComment(c) {
     try {
-      await api.post(`/documents/${id}/comments/${c.id}/resolve`);
-      apply(await api.get<DocFull>(`/documents/${id}`), false);
-    } catch (e: any) { setErr(e.message); }
+      await api.post(`api/documents/${id}/comments/${c.id}/resolve`);
+      apply(await api.get(`api/documents/${id}`), false);
+    } catch (e) { setErr(e.message); }
   }
 
-  async function openVersion(n: number | null) {
+  async function openVersion(n) {
     setViewVersion(n);
     setOldContent(null);
     if (n !== null) {
-      const v = await api.get(`/documents/${id}/versions/${n}`);
+      const v = await api.get(`api/documents/${id}/versions/${n}`);
       setOldContent(v.content || {});
     }
   }
@@ -252,7 +249,7 @@ export default function DocumentEditor({ id, me }: { id: number; me: Me }) {
           </div>
           {shownThreads.length === 0 && (
             <div className="muted small" style={{ padding: '6px 4px' }}>
-              No comments. Hover a section title and click 💬 to start a thread — Claude can read and resolve them.
+              No comments. Hover a section title and click 💬 to start a thread.
             </div>
           )}
           {shownThreads.map(c => (
@@ -279,12 +276,7 @@ export default function DocumentEditor({ id, me }: { id: number; me: Me }) {
 
 /* ================= sections ================= */
 
-function SectionBlock({ section, value, readOnly, flash, openComments, onChange, onComment }: {
-  section: Section; value: string | Row[] | undefined; readOnly: boolean; flash: boolean;
-  openComments: CommentT[];
-  onChange: (v: string | Row[]) => void;
-  onComment: (row: number | null) => void;
-}) {
+function SectionBlock({ section, value, readOnly, flash, openComments, onChange, onComment }) {
   return (
     <div className={`section ${flash ? 'flash' : ''}`}>
       <div className="section-head">
@@ -296,45 +288,39 @@ function SectionBlock({ section, value, readOnly, flash, openComments, onChange,
         <button className="icon-btn comment-btn" title="Comment on this section" onClick={() => onComment(null)}>💬</button>
       </div>
       {section.type === 'text'
-        ? <ProseArea value={(value as string) || ''} readOnly={readOnly} onChange={onChange} />
-        : <GridTable section={section} rows={(value as Row[]) || []} readOnly={readOnly}
+        ? <ProseArea value={value || ''} readOnly={readOnly} onChange={onChange} />
+        : <GridTable section={section} rows={value || []} readOnly={readOnly}
                      onChange={onChange} onCommentRow={onComment} />}
     </div>
   );
 }
 
-function ProseArea({ value, readOnly, onChange }: {
-  value: string; readOnly: boolean; onChange: (v: string) => void;
-}) {
-  const ref = useRef<HTMLTextAreaElement>(null);
+function ProseArea({ value, readOnly, onChange }) {
+  const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
     if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
   }, [value]);
   return (
     <textarea ref={ref} className="prose-edit" value={value} readOnly={readOnly}
-              placeholder={readOnly ? '—' : 'Write here… (or ask Claude to draft it from the upstream documents)'}
+              placeholder={readOnly ? '—' : 'Write here…'}
               onChange={e => onChange(e.target.value)} rows={1} />
   );
 }
 
-function GridTable({ section, rows, readOnly, onChange, onCommentRow }: {
-  section: Section; rows: Row[]; readOnly: boolean;
-  onChange: (rows: Row[]) => void; onCommentRow: (row: number) => void;
-}) {
+function GridTable({ section, rows, readOnly, onChange, onCommentRow }) {
   const cols = section.columns || [];
 
-  function setCell(ri: number, key: string, v: string) {
-    const next = rows.map((r, i) => (i === ri ? { ...r, [key]: v } : r));
-    onChange(next);
+  function setCell(ri, key, v) {
+    onChange(rows.map((r, i) => (i === ri ? { ...r, [key]: v } : r)));
   }
   function addRow() {
     onChange([...rows, Object.fromEntries(cols.map(c => [c.key, '']))]);
   }
-  function delRow(ri: number) {
+  function delRow(ri) {
     onChange(rows.filter((_, i) => i !== ri));
   }
-  function moveRow(ri: number, dir: -1 | 1) {
+  function moveRow(ri, dir) {
     const j = ri + dir;
     if (j < 0 || j >= rows.length) return;
     const next = [...rows];
@@ -383,10 +369,7 @@ function GridTable({ section, rows, readOnly, onChange, onCommentRow }: {
 
 /* ================= comments ================= */
 
-function Thread({ root, replies, sections, onReply, onResolve }: {
-  root: CommentT; replies: CommentT[]; sections: Section[];
-  onReply: (body: string) => void; onResolve: () => void;
-}) {
+function Thread({ root, replies, sections, onReply, onResolve }) {
   const [reply, setReply] = useState('');
   const title = sections.find(s => s.key === root.section_key)?.title || root.section_key;
   return (
@@ -412,7 +395,7 @@ function Thread({ root, replies, sections, onReply, onResolve }: {
   );
 }
 
-function Msg({ c }: { c: CommentT }) {
+function Msg({ c }) {
   const isClaude = c.author_kind === 'assistant';
   return (
     <div className="msg">
@@ -428,10 +411,7 @@ function Msg({ c }: { c: CommentT }) {
   );
 }
 
-function CommentModal({ target, sections, onClose, onSubmit }: {
-  target: { section: string; row: number | null }; sections: Section[];
-  onClose: () => void; onSubmit: (body: string) => void;
-}) {
+function CommentModal({ target, sections, onClose, onSubmit }) {
   const [body, setBody] = useState('');
   const title = sections.find(s => s.key === target.section)?.title || target.section;
   return (
@@ -439,7 +419,7 @@ function CommentModal({ target, sections, onClose, onSubmit }: {
       <div className="modal">
         <h2>Comment — {title}{target.row !== null ? ` · row ${target.row + 1}` : ''}</h2>
         <textarea className="input" rows={4} autoFocus value={body}
-                  placeholder="Flag missing info, question an assumption… Claude reads open comments and can resolve them."
+                  placeholder="Flag missing info, question an assumption…"
                   onChange={e => setBody(e.target.value)} />
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
           <button className="btn" onClick={onClose}>Cancel</button>
@@ -452,13 +432,13 @@ function CommentModal({ target, sections, onClose, onSubmit }: {
 
 /* ================= activity ================= */
 
-function ActivityFeed({ id, stamp }: { id: number; stamp: string | null }) {
-  const [items, setItems] = useState<Activity[]>([]);
+function ActivityFeed({ id, stamp }) {
+  const [items, setItems] = useState([]);
   useEffect(() => {
-    api.get<Activity[]>(`/documents/${id}/activity?limit=12`).then(setItems).catch(() => {});
+    api.get(`api/documents/${id}/activity?limit=12`).then(setItems).catch(() => {});
   }, [id, stamp]);
   if (!items.length) return null;
-  const verb: Record<string, string> = {
+  const verb = {
     draft_edit: 'edited', submit: 'submitted', review: 'reviewed',
     comment: 'commented', resolve_comment: 'resolved a comment',
   };

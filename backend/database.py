@@ -2,8 +2,12 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# Postgres (Render) or SQLite (local dev fallback) — same pattern as finance-dioxycle
+# On the portal, DATABASE_URL is injected and the schema comes from
+# backend/migrations/ (applied by the portal — never create_all there).
+# Without DATABASE_URL we're in local dev: SQLite file, schema created in
+# main.py from the models.
 DATABASE_URL = os.getenv("DATABASE_URL")
+IS_LOCAL_DEV = not DATABASE_URL
 
 if DATABASE_URL:
     if DATABASE_URL.startswith("postgres://"):
