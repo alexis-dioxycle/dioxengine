@@ -3,9 +3,8 @@ uvicorn>=0.32.0
 sqlalchemy>=2.0.36
 pydantic>=2.10.0
 psycopg2-binary>=2.9.9
-# Off-panel (installed at build time); candidate for the shared panel.
+# In the shared pip panel since 2026-07-15 (base/requirements.txt).
 mcp>=1.6.0
 python-multipart>=0.0.20
-# Off-panel (installed at build time); used by the Excel export.
 openpyxl>=3.1.0
 python-docx>=1.1.0

@@ -575,6 +575,14 @@ def seed_workflow2(user: DioxycleUser = Depends(track_user), db: Session = Depen
     return {"template_id": t.id}
 
 
+def _content_disposition(kind: str, filename: str) -> str:
+    """RFC 6266/5987 Content-Disposition: ASCII fallback + UTF-8 encoded name,
+    so quotes or non-ASCII in user-supplied filenames can't mangle the header."""
+    from urllib.parse import quote
+    fallback = "".join(c if 32 <= ord(c) < 127 and c not in '"\\' else "_" for c in filename)
+    return f"{kind}; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
+
+
 # ============ attachments ============
 
 MAX_ATTACHMENT_MB = 15
@@ -620,7 +628,7 @@ def get_attachment(did: int, aid: int, user: DioxycleUser = Depends(track_user),
     if not a or a.document_id != did:
         raise HTTPException(404, "Attachment not found")
     return Response(content=a.data, media_type=a.content_type,
-                    headers={"Content-Disposition": f'inline; filename="{a.filename}"'})
+                    headers={"Content-Disposition": _content_disposition("inline", a.filename)})
 
 
 @app.delete("/api/documents/{did}/attachments/{aid}")
@@ -694,7 +702,7 @@ def export_xlsx(did: int, user: DioxycleUser = Depends(track_user),
     return Response(
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+        headers={"Content-Disposition": _content_disposition("attachment", fname)})
 
 
 # ============ Word export ============
@@ -779,7 +787,7 @@ def export_docx(did: int, user: DioxycleUser = Depends(track_user),
     return Response(
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+        headers={"Content-Disposition": _content_disposition("attachment", fname)})
 
 
 # ============ static frontend (mounted after all API routes) ============
