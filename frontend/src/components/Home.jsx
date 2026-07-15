@@ -14,9 +14,18 @@ export default function Home({ me }) {
   };
   useEffect(load, []);
 
-  async function seed() {
-    try { await api.post('api/seed-example'); load(); }
+  async function seed(path) {
+    try { await api.post(path); load(); }
     catch (e) { setErr(e.message); }
+  }
+
+  async function newTemplate() {
+    const name = window.prompt('Template name (e.g. "BOS Full Workflow"):');
+    if (!name) return;
+    try {
+      const r = await api.post('api/templates', { name, description: '' });
+      window.location.hash = `#/templates/${r.template_version_id}`;
+    } catch (e) { setErr(e.message); }
   }
 
   const published = (templates || []).flatMap(t =>
@@ -47,8 +56,9 @@ export default function Home({ me }) {
             <p className="soft" style={{ margin: 0 }}>No projects yet.</p>
             {published.length === 0 && (
               <p className="muted small">
-                Start by seeding the example template:&nbsp;
-                <button className="btn sm" onClick={seed}>Seed “Electrolyzer Basic Engineering”</button>
+                Start from a seed:&nbsp;
+                <button className="btn sm" onClick={() => seed('api/seed-workflow1')}>Seed “BOS Procurement — Workflow 1”</button>
+                &nbsp;<button className="btn sm" onClick={() => seed('api/seed-example')}>Seed “Electrolyzer Basic Engineering”</button>
               </p>
             )}
           </div>
@@ -66,28 +76,34 @@ export default function Home({ me }) {
         ))}
       </div>
 
-      <h2 className="subtitle">Workflow templates</h2>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+        <h2 className="subtitle">Workflow templates</h2>
+        <button className="btn sm" onClick={newTemplate}>+ New template</button>
+      </div>
       <div className="card">
         {templates === null ? (
           <div style={{ padding: 24, textAlign: 'center' }}><span className="spin dark" /></div>
         ) : templates.length === 0 ? (
           <div style={{ padding: '26px 24px' }}>
             <span className="soft">No templates visible to you. </span>
-            <button className="btn sm" onClick={seed}>Seed the example template</button>
+            <button className="btn sm" onClick={() => seed('api/seed-workflow1')}>Seed Workflow 1</button>
           </div>
-        ) : templates.map(t => (
-          <div key={t.id} className="rowlink" style={{ cursor: 'default' }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 600 }}>{t.name}</div>
-              <div className="muted small">{t.description}</div>
-            </div>
-            {t.versions.map(v => (
-              <span key={v.id} className={`pill ${v.status === 'published' ? 'approved' : 'draft'}`}>
-                v{v.version_number} {v.status}
-              </span>
-            ))}
-          </div>
-        ))}
+        ) : templates.map(t => {
+          const latest = t.versions[t.versions.length - 1];
+          return (
+            <a key={t.id} className="rowlink" href={`#/templates/${latest?.id}`}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600 }}>{t.name}</div>
+                <div className="muted small">{t.description}</div>
+              </div>
+              {t.versions.map(v => (
+                <span key={v.id} className={`pill ${v.status === 'published' ? 'approved' : 'draft'}`}>
+                  v{v.version_number} {v.status}
+                </span>
+              ))}
+            </a>
+          );
+        })}
       </div>
 
       {creating && <NewProject published={published} onClose={() => setCreating(false)} onDone={load} />}

@@ -558,6 +558,14 @@ def seed_example(user: DioxycleUser = Depends(track_user), db: Session = Depends
     return {"template_id": t.id}
 
 
+@app.post("/api/seed-workflow1")
+def seed_workflow1(user: DioxycleUser = Depends(track_user), db: Session = Depends(get_db)):
+    t = seed.seed_workflow1(db, owner_email=user.email)
+    if t is None:
+        raise HTTPException(409, "Workflow 1 template already exists")
+    return {"template_id": t.id}
+
+
 # ============ static frontend (mounted after all API routes) ============
 
 _static_dir = Path(__file__).parent / "static"

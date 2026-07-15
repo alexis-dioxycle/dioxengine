@@ -3,6 +3,7 @@ import { api } from './utils/api';
 import Home from './components/Home';
 import ProjectPage from './components/Project';
 import DocumentEditor from './components/DocumentEditor';
+import TemplateEditor from './components/TemplateEditor';
 
 function parseHash() {
   const h = window.location.hash.replace(/^#\/?/, '');
@@ -12,6 +13,7 @@ function parseHash() {
   const seg = path.split('/').filter(Boolean);
   if (seg[0] === 'projects' && seg[1]) return { name: 'project', params: { ...params, id: seg[1] } };
   if (seg[0] === 'documents' && seg[1]) return { name: 'document', params: { ...params, id: seg[1] } };
+  if (seg[0] === 'templates' && seg[1]) return { name: 'template', params: { ...params, id: seg[1] } };
   return { name: 'home', params };
 }
 
@@ -59,6 +61,7 @@ export default function App() {
       </nav>
       {route.name === 'project' && <ProjectPage id={Number(route.params.id)} me={me} />}
       {route.name === 'document' && <DocumentEditor id={Number(route.params.id)} me={me} />}
+      {route.name === 'template' && <TemplateEditor tvid={Number(route.params.id)} me={me} />}
       {route.name === 'home' && <Home me={me} />}
     </>
   );

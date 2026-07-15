@@ -191,3 +191,125 @@ def seed_example(db: Session, owner_email: str = ""):
     write_graph(db, tv, nodes, edges)
     db.commit()
     return t
+
+
+# ---------------------------------------------------------------------------
+# Workflow 1 — Bastien's procurement chain, schemas mirrored from the real
+# 5000F2PBOS documents (PFD, Sized Equipment List with one sheet per
+# equipment family, per-equipment datasheets, multi-equipment vendor offers).
+# Units live in the column labels; the EL sections deliberately simplify the
+# Excel template ("this template can be simplified" — Bastien, 2026-07-09).
+# ---------------------------------------------------------------------------
+
+WORKFLOW1_TEMPLATE_NAME = "BOS Procurement — Workflow 1"
+
+
+def _workflow1_nodes_and_edges():
+    nodes = [
+        dict(node_key="pfd", name="Process Flow Diagram", author_role="Process Engineer",
+             reviewer_role="Director of Engineering",
+             description="Structured shadow of the PFD drawing: the equipment register downstream documents reference.",
+             content_schema={"sections": [
+                 {"key": "equipment", "title": "Equipment register", "type": "table",
+                  "columns": _table(("tag", "Tag", "text"), ("service", "Service", "text"),
+                                    ("family", "Family", "text"))},
+                 {"key": "notes", "title": "Drawing notes", "type": "text"}]}),
+        dict(node_key="el", name="Sized Equipment List", author_role="Process Engineer",
+             reviewer_role="Director of Engineering",
+             description="All equipment with sizing and design conditions — one section per family, mirroring the EL workbook.",
+             content_schema={"sections": [
+                 {"key": "vessels", "title": "Vessels", "type": "table",
+                  "columns": _table(("item", "Item", "text"), ("number", "Qty", "number"),
+                                    ("service", "Service", "text"), ("position", "Position (V/H)", "text"),
+                                    ("material", "Material", "text"), ("size_mm", "Size D×L or H (mm)", "text"),
+                                    ("volume_m3", "Volume (m³)", "number"),
+                                    ("design_p_barg", "Design P (barg)", "number"),
+                                    ("design_t_c", "Design T (°C)", "number"),
+                                    ("weight_kg", "Weight empty (kg)", "number"),
+                                    ("comments", "Comments", "text"))},
+                 {"key": "rotating", "title": "Rotating machines", "type": "table",
+                  "columns": _table(("item", "Item", "text"), ("service", "Service", "text"),
+                                    ("number", "Qty", "number"), ("type", "Type", "text"),
+                                    ("materials", "Materials", "text"),
+                                    ("flow_m3h", "Flowrate (m³/h)", "number"),
+                                    ("head_m", "Head (m)", "number"),
+                                    ("motor_kw", "Motor power (kW)", "number"),
+                                    ("design_t_c", "Design T (°C)", "number"),
+                                    ("comments", "Comments", "text"))},
+                 {"key": "hx", "title": "Heat exchangers", "type": "table",
+                  "columns": _table(("item", "Item", "text"), ("service", "Service", "text"),
+                                    ("number", "Qty", "number"), ("type", "Type", "text"),
+                                    ("material_ts", "Material TS", "text"),
+                                    ("material_ss", "Material SS", "text"),
+                                    ("size", "Size", "text"),
+                                    ("area_m2", "Exchange area (m²)", "number"),
+                                    ("design_p_barg", "Design P (barg)", "number"),
+                                    ("design_t_c", "Design T (°C)", "number"),
+                                    ("comments", "Comments", "text"))},
+                 {"key": "packages", "title": "Packages & miscellaneous", "type": "table",
+                  "columns": _table(("item", "Item", "text"), ("service", "Service", "text"),
+                                    ("number", "Qty", "number"), ("position", "Position (V/H)", "text"),
+                                    ("material", "Material", "text"), ("size_mm", "Size D×L or H (mm)", "text"),
+                                    ("design_p_barg", "Design P (barg)", "number"),
+                                    ("design_t_c", "Design T (°C)", "number"),
+                                    ("comments", "Comments", "text"))}]}),
+        dict(node_key="ds", name="Equipment Datasheets", author_role="Process Engineer",
+             reviewer_role="Director of Engineering",
+             description="Register of per-equipment datasheets (the PDFs generated from the sizing calc, e.g. 5000D2PBOS-HX201-DS) and their key parameters.",
+             content_schema={"sections": [
+                 {"key": "register", "title": "Datasheet register", "type": "table",
+                  "columns": _table(("tag", "Tag", "text"), ("doc_ref", "Datasheet ref", "text"),
+                                    ("rev", "Rev", "text"), ("status", "Status", "text"),
+                                    ("key_params", "Key parameters", "text"),
+                                    ("comments", "Comments", "text"))}]}),
+        dict(node_key="offers", name="Vendor Offers", author_role="Process Engineer",
+             reviewer_role="Director of Engineering",
+             description="One filling register for all offers received — one row per offer, tags list which equipment it covers (offers often bundle several items).",
+             content_schema={"sections": [
+                 {"key": "register", "title": "Offers register", "type": "table",
+                  "columns": _table(("vendor", "Vendor", "text"), ("offer_ref", "Offer ref", "text"),
+                                    ("date", "Date", "text"),
+                                    ("equipment_tags", "Equipment covered (tags)", "text"),
+                                    ("price", "Price", "number"), ("currency", "Currency", "text"),
+                                    ("delivery_wks", "Delivery (wks)", "number"),
+                                    ("validity", "Valid until", "text"),
+                                    ("comments", "Comments", "text"))}]}),
+        dict(node_key="comparison", name="Bid Comparison & Selection", author_role="Process Engineer",
+             reviewer_role="Director of Engineering",
+             description="Technical comparison (long format: one row per tag × criterion × vendor) and the award decision per equipment.",
+             content_schema={"sections": [
+                 {"key": "technical", "title": "Technical comparison", "type": "table",
+                  "columns": _table(("tag", "Tag", "text"), ("criterion", "Criterion", "text"),
+                                    ("requirement", "Requirement", "text"), ("vendor", "Vendor", "text"),
+                                    ("offered", "Offered", "text"), ("compliant", "Compliant", "text"),
+                                    ("deviation", "Deviation", "text"))},
+                 {"key": "selection", "title": "Selection", "type": "table",
+                  "columns": _table(("tag", "Tag", "text"), ("vendor", "Vendor", "text"),
+                                    ("offer_ref", "Offer ref", "text"), ("price", "Price", "number"),
+                                    ("justification", "Justification", "text"))},
+                 {"key": "recommendation", "title": "Recommendation", "type": "text"}]}),
+    ]
+    edges = [("pfd", "el"), ("el", "ds"), ("ds", "offers"), ("el", "offers"),
+             ("offers", "comparison"), ("ds", "comparison")]
+    return nodes, edges
+
+
+def seed_workflow1(db: Session, owner_email: str = ""):
+    if db.query(WorkflowTemplate).filter(WorkflowTemplate.name == WORKFLOW1_TEMPLATE_NAME).first():
+        return None
+    t = WorkflowTemplate(
+        name=WORKFLOW1_TEMPLATE_NAME,
+        description="PFD → sized equipment list → datasheets → vendor offers → comparison & selection. Schemas mirror the real 5000F2PBOS documents.",
+        created_by=owner_email)
+    db.add(t)
+    db.flush()
+    if owner_email:
+        db.add(TemplateOwner(template_id=t.id, user_email=owner_email))
+    tv = TemplateVersion(template_id=t.id, version_number=1, status="published",
+                         created_by=owner_email, published_at=datetime.utcnow())
+    db.add(tv)
+    db.flush()
+    nodes, edges = _workflow1_nodes_and_edges()
+    write_graph(db, tv, nodes, edges)
+    db.commit()
+    return t
