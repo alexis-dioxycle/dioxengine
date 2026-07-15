@@ -8,3 +8,4 @@ mcp>=1.6.0
 python-multipart>=0.0.20
 # Off-panel (installed at build time); used by the Excel export.
 openpyxl>=3.1.0
+python-docx>=1.1.0

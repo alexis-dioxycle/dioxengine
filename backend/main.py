@@ -697,6 +697,91 @@ def export_xlsx(did: int, user: DioxycleUser = Depends(track_user),
         headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
+# ============ Word export ============
+
+@app.get("/api/documents/{did}/export.docx")
+def export_docx(did: int, user: DioxycleUser = Depends(track_user),
+                db: Session = Depends(get_db)):
+    """Render the document as a Word file generated from its structured
+    content: cover block (doc number, revision, dates, author/reviewer),
+    then one heading per section with prose or a styled table. Per-type
+    Dioxycle templates (PROJECT-CTL-001 style) come next; this generic
+    renderer is the default."""
+    import io
+    from docx import Document as Docx
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm, Pt, RGBColor
+
+    doc = svc.get_document_or_404(db, did, user)
+    head = svc.latest_version(doc)
+    content = (head.content if head else {}) or {}
+    sections = (doc.node.content_schema or {}).get("sections", [])
+    rev = head.version_number if head else 0
+    doc_no = f"{doc.project.name.upper().replace(' ', '-')}-{doc.node.node_key.upper()}-{rev:03d}"
+
+    d = Docx()
+    style = d.styles["Normal"]
+    style.font.name = "Calibri"
+    style.font.size = Pt(10)
+    for s in d.sections:
+        s.left_margin = s.right_margin = Cm(2)
+
+    p = d.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    r = p.add_run(doc_no)
+    r.font.size = Pt(8)
+    r.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)
+
+    h = d.add_heading(doc.node.name, level=0)
+    if doc.node.description:
+        d.add_paragraph(doc.node.description).runs[0].italic = True
+
+    meta = d.add_table(rows=2, cols=4)
+    meta.style = "Table Grid"
+    meta.alignment = WD_TABLE_ALIGNMENT.LEFT
+    cells = [("Project", doc.project.name), ("Revision", str(rev)),
+             ("Status", (head.status if head else "empty")),
+             ("Date", (head.updated_at.strftime("%Y-%m-%d") if head and head.updated_at else "")),
+             ("Author", doc.author_email or f"({doc.node.author_role or 'unassigned'})"),
+             ("Reviewer", doc.reviewer_email or f"({doc.node.reviewer_role or 'unassigned'})"),
+             ("Approved by", head.reviewed_by or "" if head else ""), ("Doc N°", doc_no)]
+    for i, (k, v) in enumerate(cells):
+        cell = meta.rows[i // 4].cells[i % 4]
+        para = cell.paragraphs[0]
+        run = para.add_run(f"{k}\n")
+        run.bold = True
+        run.font.size = Pt(7.5)
+        para.add_run(str(v)).font.size = Pt(9)
+
+    for s in sections:
+        d.add_heading(s.get("title") or s["key"], level=2)
+        if s.get("type") == "table":
+            cols = s.get("columns", [])
+            rows = content.get(s["key"], []) or []
+            t = d.add_table(rows=1, cols=len(cols) or 1)
+            t.style = "Table Grid"
+            for i, c in enumerate(cols):
+                run = t.rows[0].cells[i].paragraphs[0].add_run(c["label"])
+                run.bold = True
+                run.font.size = Pt(8)
+            for row in rows:
+                tr = t.add_row()
+                for i, c in enumerate(cols):
+                    tr.cells[i].paragraphs[0].add_run(str(row.get(c["key"], "") or "")).font.size = Pt(8.5)
+        else:
+            for para_text in (content.get(s["key"], "") or "—").split("\n"):
+                d.add_paragraph(para_text)
+
+    buf = io.BytesIO()
+    d.save(buf)
+    fname = f"{doc_no}.docx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 # ============ static frontend (mounted after all API routes) ============
 
 _static_dir = Path(__file__).parent / "static"

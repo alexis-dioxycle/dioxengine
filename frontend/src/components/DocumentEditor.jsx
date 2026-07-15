@@ -198,7 +198,8 @@ export default function DocumentEditor({ id, me }) {
             <span className="dot" />
             {saving ? 'saving…' : dirty ? 'editing…' : status ? `rev ${doc.latest_version_number} saved` : 'no content yet'}
           </span>
-          <a className="btn sm" href={`api/documents/${id}/export.xlsx`} title="Download the document as an Excel workbook">⤓ .xlsx</a>
+          <a className="btn sm" href={`api/documents/${id}/export.docx`} title="Generate the Word deliverable from this document's content">⤓ .docx</a>
+          <a className="btn sm" href={`api/documents/${id}/export.xlsx`} title="Generate the Excel deliverable from this document's content">⤓ .xlsx</a>
           <select className="input" style={{ width: 'auto', padding: '5px 8px', fontSize: 12.5 }}
                   value={viewVersion ?? ''}
                   onChange={e => openVersion(e.target.value === '' ? null : Number(e.target.value))}>
@@ -359,9 +360,140 @@ function SectionBlock({ section, value, readOnly, flash, hl, openComments, onCha
       </div>
       {section.type === 'text'
         ? <ProseArea value={value || ''} readOnly={readOnly} onChange={onChange} />
-        : <GridTable section={section} rows={value || []} readOnly={readOnly}
-                     hlRow={hl && hl.row !== null && hl.row !== undefined ? hl.row : -1}
-                     onChange={onChange} onCommentRow={onComment} />}
+        : <>
+            <FlowDiagram section={section} rows={value || []} />
+            <GridTable section={section} rows={value || []} readOnly={readOnly}
+                       hlRow={hl && hl.row !== null && hl.row !== undefined ? hl.row : -1}
+                       onChange={onChange} onCommentRow={onComment} />
+          </>}
+    </div>
+  );
+}
+
+/* ---- living diagram: any table section with from/to columns renders as a
+   flow graph, straight from its rows — edit the table, the drawing follows ---- */
+const FROM_KEYS = ['from_', 'from', 'source', 'src'];
+const TO_KEYS = ['to', 'to_', 'dest', 'target'];
+
+function FlowDiagram({ section, rows }) {
+  const [open, setOpen] = useState(true);
+  const cols = section.columns || [];
+  const fromKey = cols.map(c => c.key).find(k => FROM_KEYS.includes(k));
+  const toKey = cols.map(c => c.key).find(k => TO_KEYS.includes(k));
+  if (!fromKey || !toKey) return null;
+  const labelKey = cols.map(c => c.key).find(k => k !== fromKey && k !== toKey);
+
+  const links = rows
+    .map(r => ({ from: String(r[fromKey] ?? '').trim(), to: String(r[toKey] ?? '').trim(),
+                 label: labelKey ? String(r[labelKey] ?? '').trim() : '' }))
+    .filter(l => l.from && l.to);
+  if (!links.length) return null;
+
+  // layered layout over the distinct endpoints
+  const names = [...new Set(links.flatMap(l => [l.from, l.to]))];
+  const indeg = new Map(names.map(n => [n, 0]));
+  const out = new Map();
+  for (const l of links) {
+    indeg.set(l.to, (indeg.get(l.to) || 0) + 1);
+    out.set(l.from, [...(out.get(l.from) || []), l.to]);
+  }
+  const layer = new Map();
+  const q = names.filter(n => (indeg.get(n) || 0) === 0);
+  q.forEach(n => layer.set(n, 0));
+  const indegW = new Map(indeg);
+  const queue = [...q];
+  while (queue.length) {
+    const n = queue.shift();
+    for (const m of out.get(n) || []) {
+      layer.set(m, Math.max(layer.get(m) || 0, (layer.get(n) || 0) + 1));
+      indegW.set(m, (indegW.get(m) || 0) - 1);
+      if ((indegW.get(m) || 0) === 0) queue.push(m);
+    }
+  }
+  // Recycle loops are normal in a process: nodes inside cycles never drain in
+  // Kahn, so spread them by BFS from whatever IS layered (first-touch wins),
+  // letting back-edges simply draw right-to-left.
+  if (!layer.size) layer.set(names[0], 0);
+  const assigned = new Set(layer.keys());
+  let frontier = [...assigned];
+  while (frontier.length) {
+    const next = [];
+    for (const n of frontier) {
+      for (const m of out.get(n) || []) {
+        if (!assigned.has(m)) {
+          layer.set(m, (layer.get(n) || 0) + 1);
+          assigned.add(m);
+          next.push(m);
+        }
+      }
+    }
+    frontier = next;
+  }
+  names.forEach(n => { if (!assigned.has(n)) layer.set(n, 0); });
+  const colsMap = new Map();
+  for (const n of names) {
+    const l = layer.get(n);
+    colsMap.set(l, [...(colsMap.get(l) || []), n]);
+  }
+  const W = 128, H = 34, GX = 74, GY = 14;
+  let maxRows = 1;
+  for (const [, ns] of colsMap) maxRows = Math.max(maxRows, ns.length);
+  const totalH = maxRows * (H + GY);
+  const pos = new Map();
+  for (const [l, ns] of [...colsMap.entries()].sort((a, b) => a[0] - b[0])) {
+    const colH = ns.length * (H + GY) - GY;
+    ns.forEach((n, i) => pos.set(n, { x: l * (W + GX), y: (totalH - colH) / 2 + i * (H + GY) }));
+  }
+  const width = (Math.max(...[...colsMap.keys()]) + 1) * (W + GX) - GX;
+
+  return (
+    <div style={{ margin: '2px 0 10px' }}>
+      <button className="btn ghost sm" onClick={() => setOpen(v => !v)}>
+        {open ? '▾' : '▸'} Diagram <span className="muted">({names.length} items, {links.length} flows)</span>
+      </button>
+      {open && (
+        <div className="dag-box" style={{ border: '1px solid var(--line)', borderRadius: 9, marginTop: 6, background: '#fcfdff' }}>
+          <svg width={width + 8} height={totalH + 8} style={{ display: 'block', margin: '0 auto' }}>
+            <defs>
+              <marker id="farr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M0,0.8 L7,4 L0,7.2" fill="none" stroke="var(--accent-mid)" strokeWidth="1.2" />
+              </marker>
+            </defs>
+            {links.map((l, i) => {
+              const a = pos.get(l.from), b = pos.get(l.to);
+              if (!a || !b) return null;
+              const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x - 2, y2 = b.y + H / 2;
+              const mx = (x1 + x2) / 2;
+              return (
+                <g key={i}>
+                  <path d={`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`}
+                        fill="none" stroke="var(--accent-mid)" strokeWidth="1.2" opacity="0.7"
+                        markerEnd="url(#farr)" />
+                  {l.label && (
+                    <text x={mx} y={(y1 + y2) / 2 - 5} textAnchor="middle"
+                          style={{ font: '500 9px var(--font-mono)', fill: 'var(--ink-faint)' }}>
+                      {l.label.length > 16 ? l.label.slice(0, 15) + '…' : l.label}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+            {names.map(n => {
+              const pt = pos.get(n);
+              return (
+                <g key={n} transform={`translate(${pt.x},${pt.y})`}>
+                  <rect width={W} height={H} rx={7}
+                        style={{ fill: 'var(--paper)', stroke: 'var(--line-strong)' }} />
+                  <text x={W / 2} y={H / 2 + 4} textAnchor="middle"
+                        style={{ font: '500 10.5px var(--font-sans)', fill: 'var(--ink)' }}>
+                    {n.length > 18 ? n.slice(0, 17) + '…' : n}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+      )}
     </div>
   );
 }

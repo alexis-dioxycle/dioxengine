@@ -208,11 +208,15 @@ def _workflow1_nodes_and_edges():
     nodes = [
         dict(node_key="pfd", name="Process Flow Diagram", author_role="Process Engineer",
              reviewer_role="Director of Engineering",
-             description="Structured shadow of the PFD drawing: the equipment register downstream documents reference.",
+             description="The process as structured data: equipment register + streams. The streams table renders as a live diagram in the editor.",
              content_schema={"sections": [
                  {"key": "equipment", "title": "Equipment register", "type": "table",
                   "columns": _table(("tag", "Tag", "text"), ("service", "Service", "text"),
                                     ("family", "Family", "text"))},
+                 {"key": "streams", "title": "Streams", "type": "table",
+                  "columns": _table(("stream", "Stream", "text"), ("from_", "From", "text"),
+                                    ("to", "To", "text"), ("fluid", "Fluid", "text"),
+                                    ("comments", "Comments", "text"))},
                  {"key": "notes", "title": "Drawing notes", "type": "text"}]}),
         dict(node_key="el", name="Sized Equipment List", author_role="Process Engineer",
              reviewer_role="Director of Engineering",

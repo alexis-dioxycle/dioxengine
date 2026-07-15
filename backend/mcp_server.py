@@ -690,3 +690,44 @@ def upload_attachment(document_id: int, filename: str, content_base64: str,
         db.commit()
         return {"ok": True, "attachment_id": a.id, "size_bytes": len(data)}
     return _run(body)
+
+
+@mcp.tool()
+def new_template_version(template_id: int) -> str:
+    """Create a new DRAFT version of a template, copying the latest published
+    graph. Use when a published template needs schema changes: edit the new
+    draft with update_template_graph, then publish_template.
+
+    Args:
+        template_id: The template (from list_templates).
+    """
+    def body(db, me):
+        svc.require_template_access(db, template_id, me, need_owner=True)
+        src = (db.query(TemplateVersion).filter(TemplateVersion.template_id == template_id)
+               .order_by((TemplateVersion.status == "published").desc(),
+                         TemplateVersion.version_number.desc()).first())
+        if not src:
+            raise ValueError("Template not found")
+        nxt = max(v.version_number for v in src.template.versions) + 1
+        tv = TemplateVersion(template_id=template_id, version_number=nxt,
+                             status="draft", created_by=me.email)
+        db.add(tv)
+        db.flush()
+        id_map = {}
+        for n in src.nodes:
+            node = DocumentTypeNode(
+                template_version_id=tv.id, node_key=n.node_key, name=n.name,
+                description=n.description, content_schema=n.content_schema,
+                author_role=n.author_role, reviewer_role=n.reviewer_role,
+                receiver_roles=n.receiver_roles)
+            db.add(node)
+            db.flush()
+            id_map[n.id] = node.id
+        for e in db.query(TemplateEdge).filter_by(template_version_id=src.id).all():
+            db.add(TemplateEdge(template_version_id=tv.id,
+                                from_node_id=id_map[e.from_node_id],
+                                to_node_id=id_map[e.to_node_id]))
+        db.commit()
+        return {"ok": True, "template_version_id": tv.id, "version_number": nxt,
+                "copied_from_version": src.version_number}
+    return _run(body)
