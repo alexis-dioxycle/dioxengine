@@ -57,7 +57,8 @@ export default function Home({ me }) {
             {published.length === 0 && (
               <p className="muted small">
                 Start from a seed:&nbsp;
-                <button className="btn sm" onClick={() => seed('api/seed-workflow1')}>Seed “BOS Procurement — Workflow 1”</button>
+                <button className="btn sm" onClick={() => seed('api/seed-workflow1')}>Seed “Workflow 1 — Procurement”</button>
+                &nbsp;<button className="btn sm" onClick={() => seed('api/seed-workflow2')}>Seed “Workflow 2 — Control & Safety”</button>
                 &nbsp;<button className="btn sm" onClick={() => seed('api/seed-example')}>Seed “Electrolyzer Basic Engineering”</button>
               </p>
             )}

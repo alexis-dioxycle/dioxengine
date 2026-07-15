@@ -313,3 +313,89 @@ def seed_workflow1(db: Session, owner_email: str = ""):
     write_graph(db, tv, nodes, edges)
     db.commit()
     return t
+
+
+# ---------------------------------------------------------------------------
+# Workflow 2 — control & safety chain: Control & Safety Narrative feeding the
+# Control Logic Diagrams and the Cause & Effect Matrix. Schemas follow the
+# April prototyping work (block1/block2 skills): loops, interlocks and trips
+# are structured rows the narrative pins down; the CLD register is the
+# structured shadow of Arthur's per-diagram JSON; the CEM is long-format
+# (one row per cause × effect), with DE/C/O/A actions.
+# ---------------------------------------------------------------------------
+
+WORKFLOW2_TEMPLATE_NAME = "Control & Safety — Workflow 2"
+
+
+def _workflow2_nodes_and_edges():
+    nodes = [
+        dict(node_key="csn", name="Control & Safety Narrative", author_role="Process Engineer",
+             reviewer_role="Director of Engineering", receiver_roles=["Programmer"],
+             description="Exhaustive description of what the control and safety systems must do, referencing P&ID tags. The source document for both the CLDs and the CEM.",
+             content_schema={"sections": [
+                 {"key": "philosophy", "title": "Control philosophy", "type": "text"},
+                 {"key": "loops", "title": "Control loops", "type": "table",
+                  "columns": _table(("loop_id", "Loop", "text"), ("service", "Service", "text"),
+                                    ("controlled_var", "Controlled variable", "text"),
+                                    ("sensor", "Sensor(s)", "text"), ("actuator", "Actuator", "text"),
+                                    ("controller", "Controller type", "text"),
+                                    ("logic", "Logic / setpoint", "text"))},
+                 {"key": "interlocks", "title": "Interlocks", "type": "table",
+                  "columns": _table(("id", "ID", "text"), ("equipment", "Equipment", "text"),
+                                    ("condition", "Condition", "text"), ("action", "Action", "text"),
+                                    ("reset", "Reset", "text"))},
+                 {"key": "trips", "title": "Trips & runbacks", "type": "table",
+                  "columns": _table(("id", "ID", "text"), ("trigger", "Trigger", "text"),
+                                    ("action", "Action", "text"), ("notes", "Notes", "text"))},
+                 {"key": "esd_levels", "title": "ESD levels", "type": "table",
+                  "columns": _table(("level", "Level", "text"), ("description", "Description", "text"),
+                                    ("consequences", "Consequences (summary)", "text"))},
+                 {"key": "sequences", "title": "Start-up / shutdown sequences", "type": "text"}]}),
+        dict(node_key="cld", name="Control Logic Diagrams", author_role="Automation Engineer",
+             reviewer_role="Director of Engineering", receiver_roles=["Programmer"],
+             description="Register of the control logic diagrams derived from the narrative (the full per-diagram JSON lives with the programming toolchain; this register is its structured shadow).",
+             content_schema={"sections": [
+                 {"key": "register", "title": "CLD register", "type": "table",
+                  "columns": _table(("cld_id", "CLD", "text"), ("loop_id", "Narrative loop", "text"),
+                                    ("name", "Name", "text"),
+                                    ("inputs", "Inputs (tags)", "text"),
+                                    ("outputs", "Outputs (tags)", "text"),
+                                    ("blocks", "Logic summary", "text"),
+                                    ("status", "Status", "text"))},
+                 {"key": "validation", "title": "Validation notes", "type": "text"}]}),
+        dict(node_key="cem", name="Cause & Effect Matrix", author_role="Process Engineer",
+             reviewer_role="Director of Engineering",
+             description="Safety matrix in long format: one row per cause × effect, per ESD level. Actions: DE = de-energize, C = close, O = open, A = activate.",
+             content_schema={"sections": [
+                 {"key": "matrix", "title": "Cause & effect rows", "type": "table",
+                  "columns": _table(("esd_level", "ESD level", "text"),
+                                    ("cause_tag", "Cause tag", "text"),
+                                    ("cause", "Cause description", "text"),
+                                    ("effect_tag", "Effect tag", "text"),
+                                    ("action", "Action (DE/C/O/A)", "text"),
+                                    ("comments", "Comments", "text"))},
+                 {"key": "gaps", "title": "Gaps & questions", "type": "text"}]}),
+    ]
+    edges = [("csn", "cld"), ("csn", "cem")]
+    return nodes, edges
+
+
+def seed_workflow2(db: Session, owner_email: str = ""):
+    if db.query(WorkflowTemplate).filter(WorkflowTemplate.name == WORKFLOW2_TEMPLATE_NAME).first():
+        return None
+    t = WorkflowTemplate(
+        name=WORKFLOW2_TEMPLATE_NAME,
+        description="Control & Safety Narrative → Control Logic Diagrams + Cause & Effect Matrix (the April block1/block2 chain).",
+        created_by=owner_email)
+    db.add(t)
+    db.flush()
+    if owner_email:
+        db.add(TemplateOwner(template_id=t.id, user_email=owner_email))
+    tv = TemplateVersion(template_id=t.id, version_number=1, status="published",
+                         created_by=owner_email, published_at=datetime.utcnow())
+    db.add(tv)
+    db.flush()
+    nodes, edges = _workflow2_nodes_and_edges()
+    write_graph(db, tv, nodes, edges)
+    db.commit()
+    return t
