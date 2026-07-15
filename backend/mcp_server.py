@@ -23,9 +23,11 @@ append_table_rows. Collaborate: list_comments, add_comment, reply_to_comment,
 resolve_comment, submit_document, review_document (ask first). Build:
 create_template, update_template_graph, publish_template, create_project,
 add_project_members, seed_reference_templates, new_template_version,
-set_document_skill, delete_template (ask first). Files: list_attachments,
-upload_attachment, download_attachment. SharePoint: sharepoint_status,
-sharepoint_sync_project (two-way, folder per project).
+set_document_skill, set_document_tools, delete_template (ask first). Files:
+list_attachments, upload_attachment, download_attachment. Tools:
+use_document_tool (call a Dioxycle App endpoint attached to a document).
+SharePoint: sharepoint_status, sharepoint_sync_project (two-way, folder per
+project).
 """
 import json
 import logging
@@ -198,10 +200,12 @@ def get_document(document_id: int) -> str:
     """Read one document: its section schema (keys, titles, text vs table with
     typed columns), its SKILL (the recipe for producing it — which upstream
     documents to pull from and what to take from each; follow it when
-    generating content), the current working content (open draft if any, else
-    the latest revision), version history, upstream documents, and open
-    comments. ALWAYS call this before editing — section keys and table columns
-    must match the schema exactly.
+    generating content), its TOOLS (deterministic Dioxycle Apps endpoints —
+    call them via use_document_tool for calculated values instead of
+    estimating), the current working content (open draft if any, else the
+    latest revision), version history, upstream documents, and open comments.
+    ALWAYS call this before editing — section keys and table columns must
+    match the schema exactly.
 
     Args:
         document_id: The document to read (from get_project).
@@ -216,6 +220,7 @@ def get_document(document_id: int) -> str:
             "project_id": doc.project_id,
             "content_schema": doc.node.content_schema,
             "skill": doc.node.skill or "",
+            "tools": doc.node.tools or [],
             "content": (head.content if head else {}) or {},
             "content_status": head.status if head else None,
             "versions": [svc.version_public(v) for v in reversed(doc.versions)],
@@ -516,10 +521,12 @@ def update_template_graph(template_version_id: int, graph_json: str) -> str:
         db.query(DocumentTypeNode).filter_by(template_version_id=tv.id).delete()
         db.query(TemplateEdge).filter_by(template_version_id=tv.id).delete()
         db.flush()
+        import app_tools
         clean = [{
             "node_key": n["node_key"], "name": n["name"],
             "description": n.get("description", ""),
             "skill": n.get("skill", ""),
+            "tools": app_tools.validate_tools(n.get("tools", [])),
             "author_role": n.get("author_role", ""),
             "reviewer_role": n.get("reviewer_role", ""),
             "receiver_roles": n.get("receiver_roles", []),
@@ -807,6 +814,74 @@ def delete_template(template_id: int) -> str:
 
 
 @mcp.tool()
+def use_document_tool(document_id: int, tool_name: str, params_json: str = "{}") -> str:
+    """Call one of the deterministic tools attached to a document (listed in
+    get_document's "tools", with their expected params). Use these for
+    calculated values — pressure drops, sizing, ratings — instead of
+    estimating: deterministic calcs live in Dioxycle Apps, the assistant
+    orchestrates. The HTTP call is made by the DioXengine backend against an
+    allowlisted host; the result is returned verbatim.
+
+    Args:
+        document_id: The document whose tool to call.
+        tool_name: The tool's name, exactly as listed in get_document.
+        params_json: JSON object of parameters, e.g. '{"flow_kgh": 120, "diameter_mm": 25}'.
+            GET tools receive them as query parameters, POST tools as the JSON body.
+    """
+    def body(db, me):
+        import app_tools
+        doc = _doc(db, me, document_id)
+        tools = doc.node.tools or []
+        tool = next((t for t in tools if t.get("name") == tool_name), None)
+        if not tool:
+            raise ValueError(f"No tool '{tool_name}' on this document — available: "
+                             + (", ".join(t.get("name", "?") for t in tools) or "none"))
+        params = json.loads(params_json) if params_json.strip() else {}
+        if not isinstance(params, dict):
+            raise ValueError("params_json must be a JSON object")
+        result = app_tools.call_tool(tool, params)
+        svc.log(db, document=doc, actor_email=me.email, actor_kind="assistant",
+                action="tool_call", payload={"tool": tool_name, "status": result["status"]})
+        db.commit()
+        return result
+    return _run(body)
+
+
+@mcp.tool()
+def set_document_tools(template_version_id: int, node_key: str, tools_json: str) -> str:
+    """Attach deterministic tools (Dioxycle Apps endpoints) to a document
+    type — replaces its full tool list. Works on PUBLISHED versions too
+    (template owners only), like set_document_skill.
+
+    tools_json: JSON array, e.g.
+      [{"name": "pressure_drop", "description": "ΔP for a line segment",
+        "url": "https://apps.dioxycle.com/_apps/line-sizer/api/pressure-drop",
+        "method": "GET", "params": "fluid, flow_kgh, diameter_mm, length_m"}]
+    Hosts must be on the TOOL_ALLOWED_HOSTS allowlist (default
+    apps.dioxycle.com). Reference the tools by name in the document's skill.
+
+    Args:
+        template_version_id: The template version (from list_templates).
+        node_key: The document type's key within that version.
+        tools_json: The full replacement tool list as a JSON array.
+    """
+    def body(db, me):
+        import app_tools
+        tv = db.get(TemplateVersion, template_version_id)
+        if not tv:
+            raise ValueError("Template version not found")
+        svc.require_template_access(db, tv.template_id, me, need_owner=True)
+        node = next((n for n in tv.nodes if n.node_key == node_key), None)
+        if not node:
+            raise ValueError(f"No document type '{node_key}' in this version — "
+                             "valid keys: " + ", ".join(n.node_key for n in tv.nodes))
+        node.tools = app_tools.validate_tools(json.loads(tools_json))
+        db.commit()
+        return {"ok": True, "node_key": node_key, "tools": [t["name"] for t in node.tools]}
+    return _run(body)
+
+
+@mcp.tool()
 def sharepoint_status() -> str:
     """Check the SharePoint integration: configured? site reachable? Returns
     the site name and URL when the Sites.Selected grant is in place."""
@@ -864,7 +939,8 @@ def new_template_version(template_id: int) -> str:
             node = DocumentTypeNode(
                 template_version_id=tv.id, node_key=n.node_key, name=n.name,
                 description=n.description, content_schema=n.content_schema,
-                skill=n.skill, author_role=n.author_role, reviewer_role=n.reviewer_role,
+                skill=n.skill, tools=n.tools,
+                author_role=n.author_role, reviewer_role=n.reviewer_role,
                 receiver_roles=n.receiver_roles)
             db.add(node)
             db.flush()

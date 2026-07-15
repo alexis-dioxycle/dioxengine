@@ -105,6 +105,7 @@ class NodeSpec(BaseModel):
     description: str = ""
     content_schema: dict = Field(default_factory=lambda: {"sections": []})
     skill: str = ""
+    tools: list[dict] = Field(default_factory=list)
     author_role: str = ""
     reviewer_role: str = ""
     receiver_roles: list[str] = Field(default_factory=list)
@@ -189,7 +190,7 @@ def _tv_public(tv: TemplateVersion) -> dict:
 def _node_public(n: DocumentTypeNode) -> dict:
     return {"id": n.id, "node_key": n.node_key, "name": n.name,
             "description": n.description, "content_schema": n.content_schema,
-            "skill": n.skill or "",
+            "skill": n.skill or "", "tools": n.tools or [],
             "author_role": n.author_role, "reviewer_role": n.reviewer_role,
             "receiver_roles": n.receiver_roles or []}
 
@@ -242,7 +243,8 @@ def new_template_version(template_id: int, user: DioxycleUser = Depends(track_us
         node = DocumentTypeNode(
             template_version_id=tv.id, node_key=n.node_key, name=n.name,
             description=n.description, content_schema=n.content_schema,
-            skill=n.skill, author_role=n.author_role, reviewer_role=n.reviewer_role,
+            skill=n.skill, tools=n.tools,
+            author_role=n.author_role, reviewer_role=n.reviewer_role,
             receiver_roles=n.receiver_roles)
         db.add(node)
         db.flush()
@@ -372,6 +374,27 @@ def set_node_skill(nid: int, body: SkillUpdate,
     n.skill = body.skill
     db.commit()
     return {"ok": True}
+
+
+class ToolsUpdate(BaseModel):
+    tools: list[dict] = Field(default_factory=list)
+
+
+@app.put("/api/template-nodes/{nid}/tools")
+def set_node_tools(nid: int, body: ToolsUpdate,
+                   user: DioxycleUser = Depends(track_user),
+                   db: Session = Depends(get_db)):
+    """Update a document type's attached tools (Dioxycle Apps endpoints the
+    assistant may call). Same publish rule as the skill: editable on
+    published versions, owner only."""
+    n = db.get(DocumentTypeNode, nid)
+    if not n:
+        raise HTTPException(404, "Document type not found")
+    svc.require_template_access(db, n.template_version.template_id, user, need_owner=True)
+    import app_tools
+    n.tools = app_tools.validate_tools(body.tools)
+    db.commit()
+    return {"ok": True, "tools": n.tools}
 
 
 @app.get("/api/templates/{tid}/access")
@@ -514,6 +537,7 @@ def get_document(did: int, user: DioxycleUser = Depends(track_user),
         "project_id": doc.project_id, "project_name": doc.project.name,
         "content_schema": doc.node.content_schema,
         "skill": doc.node.skill or "",
+        "tools": doc.node.tools or [],
         "can_edit": svc.can_act(doc.author_email, user),
         "can_review": svc.can_act(doc.reviewer_email, user),
         "latest_content": (head.content if head else {}) or {},

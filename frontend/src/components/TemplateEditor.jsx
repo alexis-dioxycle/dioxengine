@@ -6,7 +6,7 @@ import { api } from '../utils/api';
    published versions are frozen (create a new version to change them). */
 
 const EMPTY_NODE = () => ({
-  node_key: '', name: '', description: '', skill: '', author_role: '', reviewer_role: '',
+  node_key: '', name: '', description: '', skill: '', tools: [], author_role: '', reviewer_role: '',
   receiver_roles: [], content_schema: { sections: [] },
 });
 
@@ -25,7 +25,7 @@ export default function TemplateEditor({ tvid, me }) {
     const keyOf = Object.fromEntries(d.nodes.map(n => [n.id, n.node_key]));
     setNodes(d.nodes.map(n => ({
       id: n.id, node_key: n.node_key, name: n.name, description: n.description,
-      skill: n.skill || '',
+      skill: n.skill || '', tools: n.tools || [],
       author_role: n.author_role, reviewer_role: n.reviewer_role,
       receiver_roles: n.receiver_roles || [],
       content_schema: n.content_schema?.sections ? n.content_schema : { sections: [] },
@@ -374,6 +374,9 @@ function NodeForm({ node, editable, onChange, onSections, publishedOwner, onErr,
         )}
       </div>
 
+      <ToolsEditor node={node} editable={skillEditable} publishedOwner={publishedOwner}
+                   onChange={onChange} onErr={onErr} onMsg={onMsg} />
+
       <h2 className="subtitle" style={{ margin: '4px 0 8px' }}>Sections</h2>
       {sections.map((s, i) => (
         <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
@@ -409,6 +412,71 @@ function NodeForm({ node, editable, onChange, onSections, publishedOwner, onErr,
           <button className="add-row" onClick={() => addSection('text')}>+ Text section</button>
           <button className="add-row" onClick={() => addSection('table')}>+ Table section</button>
         </div>
+      )}
+    </div>
+  );
+}
+
+/* Deterministic tools (Dioxycle Apps endpoints) the assistant may call while
+   producing this document. Draft versions: saved with the graph. Published
+   versions (owner): saved directly, like the skill. */
+function ToolsEditor({ node, editable, publishedOwner, onChange, onErr, onMsg }) {
+  const tools = node.tools || [];
+  const [dirty, setDirty] = useState(false);
+
+  function patch(next) {
+    onChange({ tools: next });
+    if (publishedOwner) setDirty(true);
+  }
+  function patchTool(i, p) { patch(tools.map((t, x) => (x === i ? { ...t, ...p } : t))); }
+
+  async function saveTools() {
+    try {
+      await api.put(`api/template-nodes/${node.id}/tools`, { tools });
+      setDirty(false);
+      onMsg?.('Tools saved.');
+    } catch (e) { onErr?.(e.message); }
+  }
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+        <label className="lbl">Tools — deterministic apps the assistant may call</label>
+        {publishedOwner && dirty && <button className="btn sm" onClick={saveTools}>Save tools</button>}
+      </div>
+      {tools.map((t, i) => (
+        <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '170px 90px 1fr 30px', gap: 8, marginBottom: 6 }}>
+            <input className="input mono" style={{ fontSize: 12.5 }} placeholder="name (ex: pressure_drop)"
+                   value={t.name || ''} readOnly={!editable}
+                   onChange={e => patchTool(i, { name: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '') })} />
+            <select className="input" style={{ fontSize: 12.5 }} value={t.method || 'GET'} disabled={!editable}
+                    onChange={e => patchTool(i, { method: e.target.value })}>
+              <option>GET</option><option>POST</option>
+            </select>
+            <input className="input mono" style={{ fontSize: 12.5 }}
+                   placeholder="https://apps.dioxycle.com/_apps/<slug>/api/…"
+                   value={t.url || ''} readOnly={!editable}
+                   onChange={e => patchTool(i, { url: e.target.value })} />
+            {editable && (
+              <button className="icon-btn" title="Remove tool"
+                      onClick={() => patch(tools.filter((_, x) => x !== i))}>✕</button>
+            )}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <input className="input" style={{ fontSize: 12.5 }} placeholder="Description (what it computes)"
+                   value={t.description || ''} readOnly={!editable}
+                   onChange={e => patchTool(i, { description: e.target.value })} />
+            <input className="input" style={{ fontSize: 12.5 }} placeholder="Params (ex: fluid, flow_kgh, diameter_mm)"
+                   value={t.params || ''} readOnly={!editable}
+                   onChange={e => patchTool(i, { params: e.target.value })} />
+          </div>
+        </div>
+      ))}
+      {editable && (
+        <button className="add-row" onClick={() => patch([...tools, { name: '', description: '', url: '', method: 'GET', params: '' }])}>
+          + Tool
+        </button>
       )}
     </div>
   );

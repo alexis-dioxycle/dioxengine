@@ -79,6 +79,10 @@ class DocumentTypeNode(Base):
     # take from each, granularity, tools to use. Editable even after the
     # version is published (guidance, not structure).
     skill = Column(Text, default="")
+    # Deterministic tools (Dioxycle Apps endpoints) the assistant may call
+    # while producing this document: [{name, description, url, method,
+    # params}]. Same publish rule as skill: editable after publication.
+    tools = Column(JSON, default=list)
     author_role = Column(String, default="")
     reviewer_role = Column(String, default="")
     receiver_roles = Column(JSON, default=list)

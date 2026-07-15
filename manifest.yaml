@@ -17,4 +17,5 @@ secrets:
 allowed_egress:
   - login.microsoftonline.com   # Entra token endpoint
   - graph.microsoft.com         # Microsoft Graph (SharePoint drive)
+  - apps.dioxycle.com           # document tools: calls to other Dioxycle Apps endpoints
 visibility: team

@@ -280,7 +280,9 @@ export default function DocumentEditor({ id, me }) {
           )}
 
           {/* how this document is produced (defined on the workflow template) */}
-          {doc.skill && <SkillPanel skill={doc.skill} />}
+          {(doc.skill || (doc.tools || []).length > 0) && (
+            <SkillPanel skill={doc.skill} tools={doc.tools || []} />
+          )}
 
           {/* the real files behind this document; the ★ deliverable IS the
               document when it can't be structured (e.g. an AutoCAD P&ID) */}
@@ -401,18 +403,32 @@ function SectionBlock({ section, value, readOnly, flash, hl, openComments, onCha
 /* how this document is produced — the skill defined on the template node:
    which upstream documents to pull from, what to take from each. Read-only
    here; edited in the template editor (or by Claude via MCP). */
-function SkillPanel({ skill }) {
+function SkillPanel({ skill, tools = [] }) {
   const [open, setOpen] = useState(false);
   return (
     <div style={{ margin: '10px 0 2px' }}>
       <button className="btn ghost sm" onClick={() => setOpen(v => !v)}>
         {open ? '\u25be' : '\u25b8'} Skill <span className="muted">&mdash; how this document is produced</span>
+        {tools.length > 0 && <span className="muted"> &middot; {tools.length} tool{tools.length > 1 ? 's' : ''}</span>}
       </button>
       {open && (
         <div style={{ border: '1px dashed var(--line-strong)', borderRadius: 9, marginTop: 6,
-                      padding: '10px 14px', background: 'var(--bg)', whiteSpace: 'pre-wrap',
+                      padding: '10px 14px', background: 'var(--bg)',
                       font: '400 12.5px var(--font-mono)', color: 'var(--ink-soft)' }}>
-          {skill}
+          {skill && <div style={{ whiteSpace: 'pre-wrap' }}>{skill}</div>}
+          {tools.length > 0 && (
+            <div style={{ marginTop: skill ? 10 : 0, paddingTop: skill ? 8 : 0,
+                          borderTop: skill ? '1px dashed var(--line)' : 'none' }}>
+              <span className="doc-no">TOOLS</span>
+              {tools.map(t => (
+                <div key={t.name} style={{ padding: '3px 0' }} title={t.url}>
+                  <b>{t.name}</b> <span className="muted">({t.method})</span>
+                  {t.description ? ` \u2014 ${t.description}` : ''}
+                  {t.params ? <span className="muted"> \u00b7 params: {t.params}</span> : ''}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

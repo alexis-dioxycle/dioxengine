@@ -87,11 +87,11 @@ DATABASE_URL, run the lifecycle. See git log for the exact commands used.
 
 Three layers, three cadences:
 
-1. **Content/structure** (documents, templates, projects, comments, skills) —
-   no deploy ever. Through the web UI or the 28 MCP tools (Claude can build
-   whole workflows: create_template → update_template_graph →
-   publish_template → create_project; write per-document skills with
-   set_document_skill — allowed on published versions).
+1. **Content/structure** (documents, templates, projects, comments, skills,
+   tools) — no deploy ever. Through the web UI or the 30 MCP tools (Claude
+   can build whole workflows: create_template → update_template_graph →
+   publish_template → create_project; write per-document skills/tools with
+   set_document_skill / set_document_tools — allowed on published versions).
 2. **App code** (this repo) — the `.zip` loop:
    ```bash
    npm run build          # sanity-check the frontend compiles
@@ -145,6 +145,22 @@ Configured in Alexis's `~/.claude.json` for this project dir. The pip panel
   `delete_template` — owner only, 409 while any project instantiates any
   version. Project delete button on the project page (creator only). ORM
   cascade added for attachments (Postgres already cascades via FK).
+
+## Document tools (`backend/app_tools.py`, migration 005)
+
+Deterministic calcs live in Dioxycle Apps ("tools", 2026-07-06 meeting
+decision); DioXengine attaches them to document types: `tools` JSON on the
+node — [{name, description, url, method GET|POST, params}]. The assistant
+sees them in get_document and calls them via `use_document_tool` — the HTTP
+request is made by this backend (egress applies, no credentials on the
+caller side), hosts restricted to the TOOL_ALLOWED_HOSTS allowlist (default
+apps.dioxycle.com; +localhost in local dev). Editable like skills: template
+editor (Tools block per node, published+owner saves via
+`PUT /api/template-nodes/{nid}/tools`), MCP `set_document_tools`. Reference
+the tool by name in the document's skill. Reference skills for W1/W2 now
+ship in seed.py (REFERENCE_SKILLS) and are SET IN PROD on tv3/tv4
+(2026-07-15, via MCP). The dummy pressure-drop app to point a first real
+tool at doesn't exist yet — portal-side work.
 
 ## SharePoint two-way sync (`backend/sharepoint.py`, migration 004)
 

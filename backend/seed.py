@@ -204,6 +204,57 @@ def seed_example(db: Session, owner_email: str = ""):
 WORKFLOW1_TEMPLATE_NAME = "BOS Procurement — Workflow 1"
 
 
+# Default production skills for the reference workflows — the recipe each
+# document follows (which upstream documents to read, what to take from each,
+# what stays human). Written with Bastien from the real 5000F2PBOS package;
+# template owners refine them per version (skills stay editable after
+# publication).
+REFERENCE_SKILLS = {
+    "workflow1": {
+        "pfd": """The PFD usually arrives as a drawing (PDF exported from AutoCAD) attached as this document's DELIVERABLE — engineers draw it, nobody generates it. From that drawing, fill the structured shadow that feeds everything downstream:
+- Equipment register: one row per tagged equipment (tag, service, family). Keep tags EXACTLY as drawn — every tag used downstream (equipment list, datasheets, offers) must exist here first.
+- Streams: one row per stream (stream number, from, to, fluid, comments). Use the equipment tags as from/to endpoints so the diagram renders; battery limits and vents are named endpoints too (e.g. "BL Feed", "ATM Vent").
+When the drawing is revised, update both tables and flag removed/renamed tags with a comment — downstream documents key on them.""",
+        "el": """Derived from the PFD equipment register: every equipment item of the PFD appears exactly once, in its family section (vessels / rotating machines / heat exchangers / packages & misc — same families as the 5000F2PBOS workbook).
+- Pull tag (Item) and service verbatim from the PFD register; never invent tags.
+- Sizing (dimensions, volume, flowrate/head, exchange area, motor power) and design conditions (design P, design T, materials) come from process calculations. When a sizing tool is attached to this document, call it for the deterministic values instead of estimating.
+- Quantity (Qty) counts identical items; spares are counted here, not duplicated as rows.
+- Anything sized by assumption gets a comment on its row asking for confirmation — do not leave silent guesses.""",
+        "ds": """One datasheet entry per equipment that goes to procurement, derived from its Sized Equipment List row (which itself traces to the PFD).
+- Copy tag, service, sizing and design conditions VERBATIM from the equipment list — no re-derivation; if a value looks wrong, comment on the equipment list, don't fix it here.
+- Add the family-specific requirements a vendor needs to quote (nozzle/connection sizes, materials in contact, code requirements, utilities).
+- Calc-sheet values (thermal ratings, pressure drops…) come from the deterministic sizing tool when one is attached.
+- Any field you cannot source from upstream: leave it empty and flag it with a comment instead of inventing a value.""",
+        "offers": """Register of RECEIVED vendor offers — humans own the vendor relationship: never draft, send or chase RFQs; only transcribe what came in, and attach the original offer PDF as reference.
+- Offers are per-vendor documents that may quote several equipment at once: one row per quoted line item, each matched to its equipment tag(s) from the datasheets/equipment list.
+- Record: vendor, offer reference, quoted tag(s), price and currency, delivery time, validity, and scope notes (inclusions/exclusions, delivery terms).
+- The table fills up progressively as offers arrive — append, don't rewrite history.""",
+        "comparison": """Factual comparison derived from the vendor offers and the datasheets — long format: one row per criterion × vendor (price, delivery, compliance with the datasheet, materials, scope inclusions/exclusions, warranty…).
+- Only rows sourced from the offers/datasheets; cite the offer reference in the row. No scoring, no recommendation — the SELECTION IS HUMAN. If asked to recommend, decline and point to the open questions instead.
+- Where an offer bundles several equipment, normalize price per tag only when the offer itemizes it; otherwise compare at bundle level and say so explicitly in the row.
+- Gaps that block a fair comparison (missing delivery time, unclear scope) become comments for the humans to chase.""",
+    },
+    "workflow2": {
+        "csn": """The source document for the whole control & safety chain — written by process engineering, referencing P&ID tags exactly.
+- Control philosophy and start-up/shutdown sequences are prose; loops, interlocks, trips and ESD levels are structured rows.
+- Every loop/interlock references real instrument and equipment tags from the P&ID; a tag that doesn't exist upstream is a comment-worthy error.
+- Be exhaustive: the CLD register and the Cause & Effect Matrix are DERIVED from this narrative — anything not written here will not exist downstream.""",
+        "cld": """Register of control logic diagrams, one row per diagram, derived from the narrative's loops/interlocks — the structured shadow of the per-diagram JSON that lives with the programming toolchain.
+- Each narrative loop/interlock maps to exactly one diagram row (id, title, inputs, logic summary, outputs); keep the narrative's ids.
+- If the narrative is ambiguous about a logic (setpoint, reset behavior, voting), put a comment on the narrative section rather than choosing silently.""",
+        "cem": """Long-format Cause & Effect Matrix derived from the narrative's interlocks, trips and ESD levels: one row per cause × effect pair, with the action type (DE/C/O/A) — never a 2-D grid.
+- Causes and effects use the exact tags and ids from the narrative; every narrative interlock/trip must be covered, and every CEM row must trace back to one.
+- Coverage check both ways before submitting: narrative rows without CEM rows, and CEM rows without a narrative source, are flagged with comments.""",
+    },
+}
+
+
+def _apply_skills(nodes, which):
+    for n in nodes:
+        n.setdefault("skill", REFERENCE_SKILLS.get(which, {}).get(n["node_key"], ""))
+    return nodes
+
+
 def _workflow1_nodes_and_edges():
     nodes = [
         dict(node_key="pfd", name="Process Flow Diagram", author_role="Process Engineer",
@@ -314,6 +365,7 @@ def seed_workflow1(db: Session, owner_email: str = ""):
     db.add(tv)
     db.flush()
     nodes, edges = _workflow1_nodes_and_edges()
+    _apply_skills(nodes, "workflow1")
     write_graph(db, tv, nodes, edges)
     db.commit()
     return t
@@ -400,6 +452,7 @@ def seed_workflow2(db: Session, owner_email: str = ""):
     db.add(tv)
     db.flush()
     nodes, edges = _workflow2_nodes_and_edges()
+    _apply_skills(nodes, "workflow2")
     write_graph(db, tv, nodes, edges)
     db.commit()
     return t
