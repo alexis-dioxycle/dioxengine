@@ -121,7 +121,15 @@ export default function TemplateEditor({ tvid, me }) {
       )}
       {err && <p style={{ color: 'var(--bad)', fontSize: 13 }}>{err}</p>}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '260px minmax(0,1fr)', gap: 18, alignItems: 'start' }}>
+      {/* the workflow itself: an interactive DAG */}
+      <div className="card dag-box" style={{ marginBottom: 18 }}>
+        <TemplateGraph nodes={nodes} edges={edges} sel={sel} editable={editable}
+                       onSelect={setSel}
+                       onEdges={e => { setEdges(e); setDirty(true); }}
+                       onAddNode={addNode} />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '240px minmax(0,1fr)', gap: 18, alignItems: 'start' }}>
         {/* node list */}
         <div className="card" style={{ overflow: 'hidden' }}>
           <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--line)', fontWeight: 600, fontSize: 13 }}>
@@ -144,7 +152,7 @@ export default function TemplateEditor({ tvid, me }) {
           )}
         </div>
 
-        {/* node detail + edges */}
+        {/* node detail */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {node ? (
             <NodeForm node={node} editable={editable} onChange={patchNode} onSections={patchSections} />
@@ -153,10 +161,137 @@ export default function TemplateEditor({ tvid, me }) {
               <span className="soft">No document types yet — add one on the left.</span>
             </div>
           )}
-          <EdgesEditor nodes={nodes} edges={edges} editable={editable}
-                       onChange={e => { setEdges(e); setDirty(true); }} />
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ---- interactive DAG: click a node to select it; in link mode, click a
+   source then a target to create a link; hover a link to delete it ---- */
+function TemplateGraph({ nodes, edges, sel, editable, onSelect, onEdges, onAddNode }) {
+  const [linkFrom, setLinkFrom] = useState(null); // node_key being linked, or null
+  const [hoverEdge, setHoverEdge] = useState(-1);
+
+  const keyed = nodes.map((n, i) => ({ ...n, _i: i, node_key: n.node_key || `_tmp${i}` }));
+  const keys = keyed.map(n => n.node_key);
+
+  // longest-path layering (same as the project DAG)
+  const indeg = new Map(keys.map(k => [k, 0]));
+  const out = new Map();
+  const validEdges = edges.filter(e => keys.includes(e.from_key) && keys.includes(e.to_key));
+  for (const e of validEdges) {
+    indeg.set(e.to_key, (indeg.get(e.to_key) || 0) + 1);
+    out.set(e.from_key, [...(out.get(e.from_key) || []), e.to_key]);
+  }
+  const layer = new Map();
+  const queue = keys.filter(k => (indeg.get(k) || 0) === 0);
+  queue.forEach(k => layer.set(k, 0));
+  const indegW = new Map(indeg);
+  const q2 = [...queue];
+  while (q2.length) {
+    const n = q2.shift();
+    for (const m of out.get(n) || []) {
+      layer.set(m, Math.max(layer.get(m) || 0, (layer.get(n) || 0) + 1));
+      indegW.set(m, (indegW.get(m) || 0) - 1);
+      if ((indegW.get(m) || 0) === 0) q2.push(m);
+    }
+  }
+  const cols = new Map();
+  for (const k of keys) {
+    const l = layer.get(k) || 0;
+    cols.set(l, [...(cols.get(l) || []), k]);
+  }
+  const W = 164, H = 44, GX = 60, GY = 16;
+  let maxRows = 1;
+  for (const [, ns] of cols) maxRows = Math.max(maxRows, ns.length);
+  const totalH = maxRows * (H + GY);
+  const pos = new Map();
+  for (const [l, ns] of [...cols.entries()].sort((a, b) => a[0] - b[0])) {
+    const colH = ns.length * (H + GY) - GY;
+    ns.forEach((k, i) => pos.set(k, { x: l * (W + GX), y: (totalH - colH) / 2 + i * (H + GY) }));
+  }
+  const width = cols.size ? (Math.max(...[...cols.keys()]) + 1) * (W + GX) - GX : 200;
+
+  function clickNode(k, i) {
+    if (linkFrom === null) { onSelect(i); return; }
+    if (linkFrom === '') { setLinkFrom(k); return; } // picking source
+    if (linkFrom === k) { setLinkFrom(''); return; } // unpick
+    if (!edges.some(e => e.from_key === linkFrom && e.to_key === k)) {
+      onEdges([...edges, { from_key: linkFrom, to_key: k }]);
+    }
+    setLinkFrom(null);
+  }
+
+  const nameOf = Object.fromEntries(keyed.map(n => [n.node_key, n.name || n.node_key]));
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 6px 10px' }}>
+        <span className="doc-no">Workflow</span>
+        <span className="spacer" style={{ flex: 1 }} />
+        {editable && (
+          linkFrom === null ? (
+            <button className="btn sm" onClick={() => setLinkFrom('')}>🔗 Add link</button>
+          ) : (
+            <span className="small" style={{ color: 'var(--accent)', display: 'flex', gap: 8, alignItems: 'center' }}>
+              {linkFrom === '' ? 'Click the SOURCE document…' : <>From <b>{nameOf[linkFrom]}</b> — click the TARGET…</>}
+              <button className="btn ghost sm" onClick={() => setLinkFrom(null)}>cancel</button>
+            </span>
+          )
+        )}
+      </div>
+      <svg width={Math.max(width + 4, 200)} height={totalH + 4} style={{ display: 'block', margin: '0 auto' }}>
+        <defs>
+          <marker id="tarr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0.8 L7,4 L0,7.2" fill="none" stroke="var(--line-strong)" strokeWidth="1.3" />
+          </marker>
+        </defs>
+        {validEdges.map((e, i) => {
+          const a = pos.get(e.from_key), b = pos.get(e.to_key);
+          if (!a || !b) return null;
+          const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x - 2, y2 = b.y + H / 2;
+          const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+          const ei = edges.indexOf(e);
+          return (
+            <g key={i} onMouseEnter={() => setHoverEdge(ei)} onMouseLeave={() => setHoverEdge(-1)}>
+              <path className="dag-edge" markerEnd="url(#tarr)"
+                    style={hoverEdge === ei ? { stroke: 'var(--accent-mid)', strokeWidth: 2 } : {}}
+                    d={`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`} />
+              {/* fat invisible hover target */}
+              <path d={`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`}
+                    stroke="transparent" strokeWidth="14" fill="none" />
+              {editable && hoverEdge === ei && (
+                <g style={{ cursor: 'pointer' }} onClick={() => onEdges(edges.filter((_, x) => x !== ei))}>
+                  <circle cx={mx} cy={my} r={9} fill="var(--paper)" stroke="var(--bad)" strokeWidth="1.3" />
+                  <text x={mx} y={my + 3.5} textAnchor="middle" style={{ font: '600 10px sans-serif', fill: 'var(--bad)' }}>✕</text>
+                </g>
+              )}
+            </g>
+          );
+        })}
+        {keyed.map(n => {
+          const pt = pos.get(n.node_key);
+          if (!pt) return null;
+          const isSel = n._i === sel, isFrom = linkFrom === n.node_key;
+          return (
+            <g key={n.node_key} className="dag-node" transform={`translate(${pt.x},${pt.y})`}
+               style={linkFrom !== null ? { cursor: 'crosshair' } : {}}
+               onClick={() => clickNode(n.node_key, n._i)}>
+              <rect width={W} height={H} rx={8}
+                    style={isFrom ? { stroke: 'var(--accent)', strokeWidth: 2, strokeDasharray: '5 3' }
+                          : isSel ? { stroke: 'var(--accent-mid)', strokeWidth: 1.8, fill: 'var(--accent-soft)' } : {}} />
+              <text x={11} y={19}>{(n.name || n.node_key).length > 23 ? (n.name || n.node_key).slice(0, 22) + '…' : (n.name || n.node_key)}</text>
+              <text x={11} y={33} className="sub">{n.node_key} · {(n.content_schema.sections || []).length} sections</text>
+            </g>
+          );
+        })}
+      </svg>
+      {nodes.length === 0 && editable && (
+        <div style={{ textAlign: 'center', padding: 10 }}>
+          <button className="add-row" onClick={onAddNode}>+ Add the first document type</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -267,49 +402,6 @@ function ColumnsEditor({ columns, editable, onChange }) {
       {editable && (
         <button className="add-row" style={{ fontSize: 12 }}
                 onClick={() => onChange([...columns, { key: '', label: '', type: 'text' }])}>+ Column</button>
-      )}
-    </div>
-  );
-}
-
-function EdgesEditor({ nodes, edges, editable, onChange }) {
-  const keys = nodes.map(n => n.node_key).filter(Boolean);
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
-  const nameOf = Object.fromEntries(nodes.map(n => [n.node_key, n.name || n.node_key]));
-
-  return (
-    <div className="card" style={{ padding: '14px 18px' }}>
-      <h2 className="subtitle" style={{ margin: '0 0 10px' }}>Links (upstream → downstream)</h2>
-      {edges.length === 0 && <p className="muted small" style={{ margin: '0 0 8px' }}>No links yet — a document's upstream links define what its content is derived from (and drive staleness).</p>}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: editable ? 12 : 0 }}>
-        {edges.map((e, i) => (
-          <span key={i} className="pill draft" style={{ textTransform: 'none', fontSize: 12, letterSpacing: 0, padding: '4px 10px' }}>
-            {nameOf[e.from_key] || e.from_key} → {nameOf[e.to_key] || e.to_key}
-            {editable && (
-              <button className="icon-btn" style={{ width: 16, height: 16, marginLeft: 2 }}
-                      onClick={() => onChange(edges.filter((_, x) => x !== i))}>✕</button>
-            )}
-          </span>
-        ))}
-      </div>
-      {editable && (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <select className="input" style={{ width: 'auto' }} value={from} onChange={e => setFrom(e.target.value)}>
-            <option value="">from…</option>
-            {keys.map(k => <option key={k} value={k}>{nameOf[k]}</option>)}
-          </select>
-          <span className="muted">→</span>
-          <select className="input" style={{ width: 'auto' }} value={to} onChange={e => setTo(e.target.value)}>
-            <option value="">to…</option>
-            {keys.map(k => <option key={k} value={k}>{nameOf[k]}</option>)}
-          </select>
-          <button className="btn sm" disabled={!from || !to || from === to
-                    || edges.some(e => e.from_key === from && e.to_key === to)}
-                  onClick={() => { onChange([...edges, { from_key: from, to_key: to }]); setFrom(''); setTo(''); }}>
-            Add link
-          </button>
-        </div>
       )}
     </div>
   );
