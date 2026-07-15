@@ -22,7 +22,9 @@ list_templates. Write (draft): update_text_section, update_table_section,
 append_table_rows. Collaborate: list_comments, add_comment, reply_to_comment,
 resolve_comment, submit_document, review_document (ask first). Build:
 create_template, update_template_graph, publish_template, create_project,
-add_project_members, seed_reference_templates.
+add_project_members, seed_reference_templates, new_template_version,
+set_document_skill, delete_template (ask first). Files: list_attachments,
+upload_attachment, download_attachment.
 """
 import json
 import logging
@@ -193,10 +195,12 @@ def get_project(project_id: int) -> str:
 @mcp.tool()
 def get_document(document_id: int) -> str:
     """Read one document: its section schema (keys, titles, text vs table with
-    typed columns), the current working content (open draft if any, else the
-    latest revision), version history, upstream documents, and open comments.
-    ALWAYS call this before editing — section keys and table columns must match
-    the schema exactly.
+    typed columns), its SKILL (the recipe for producing it — which upstream
+    documents to pull from and what to take from each; follow it when
+    generating content), the current working content (open draft if any, else
+    the latest revision), version history, upstream documents, and open
+    comments. ALWAYS call this before editing — section keys and table columns
+    must match the schema exactly.
 
     Args:
         document_id: The document to read (from get_project).
@@ -210,6 +214,7 @@ def get_document(document_id: int) -> str:
             **svc.document_summary(db, doc),
             "project_id": doc.project_id,
             "content_schema": doc.node.content_schema,
+            "skill": doc.node.skill or "",
             "content": (head.content if head else {}) or {},
             "content_status": head.status if head else None,
             "versions": [svc.version_public(v) for v in reversed(doc.versions)],
@@ -233,15 +238,23 @@ def get_upstream_content(document_id: int) -> str:
         document_id: The downstream document you are working on.
     """
     def body(db, me):
+        from models import Attachment as _Att
         doc = _doc(db, me, document_id)
         out = []
         for u in svc.upstream_docs(db, doc):
             appr = svc.approved_version(u)
+            atts = db.query(_Att).filter_by(document_id=u.id).order_by(_Att.id).all()
             out.append({
                 "document_id": u.id, "name": u.node.name, "node_key": u.node.node_key,
                 "approved_version": appr.version_number if appr else None,
                 "content": (appr.content if appr else None),
                 "content_schema": u.node.content_schema,
+                # An upstream may live as an uploaded file rather than
+                # structured sections (kind='deliverable', e.g. a P&ID PDF):
+                # fetch it with download_attachment and extract from it.
+                "attachments": [{"id": a.id, "filename": a.filename,
+                                 "content_type": a.content_type,
+                                 "kind": a.kind or "reference"} for a in atts],
             })
         return {"upstream": out}
     return _run(body)
@@ -472,11 +485,16 @@ def update_template_graph(template_version_id: int, graph_json: str) -> str:
     graph_json shape:
       {"nodes": [{"node_key": "el", "name": "Sized Equipment List",
                   "description": "...", "author_role": "...", "reviewer_role": "...",
+                  "skill": "How to produce this document: pull ... from the PFD, ...",
                   "content_schema": {"sections": [
                     {"key": "notes", "title": "Notes", "type": "text"},
                     {"key": "vessels", "title": "Vessels", "type": "table",
                      "columns": [{"key": "item", "label": "Item", "type": "text"}]}]}}],
        "edges": [{"from_key": "pfd", "to_key": "el"}]}   // upstream -> downstream
+
+    Each node's optional "skill" is its production recipe (upstream documents
+    to read, what to extract from each, granularity, tools). Skills stay
+    editable after publication via set_document_skill.
 
     Args:
         template_version_id: The draft version to write (from list_templates
@@ -500,6 +518,7 @@ def update_template_graph(template_version_id: int, graph_json: str) -> str:
         clean = [{
             "node_key": n["node_key"], "name": n["name"],
             "description": n.get("description", ""),
+            "skill": n.get("skill", ""),
             "author_role": n.get("author_role", ""),
             "reviewer_role": n.get("reviewer_role", ""),
             "receiver_roles": n.get("receiver_roles", []),
@@ -660,13 +679,15 @@ def list_attachments(document_id: int) -> str:
         return {"attachments": [{
             "id": a.id, "filename": a.filename, "content_type": a.content_type,
             "size_bytes": a.size_bytes, "uploaded_by": a.uploaded_by,
+            "kind": a.kind or "reference",
         } for a in rows]}
     return _run(body)
 
 
 @mcp.tool()
 def upload_attachment(document_id: int, filename: str, content_base64: str,
-                      content_type: str = "application/pdf") -> str:
+                      content_type: str = "application/pdf",
+                      kind: str = "reference") -> str:
     """Attach a file to a document (max 15 MB). PDFs render inline in the web
     editor — use this to give a document its real drawing or original file.
 
@@ -675,20 +696,112 @@ def upload_attachment(document_id: int, filename: str, content_base64: str,
         filename: File name shown to users (e.g. "5000F2PBOS-PFD-001-rev002.pdf").
         content_base64: The file bytes, base64-encoded.
         content_type: MIME type (default application/pdf).
+        kind: 'reference' (supporting original, default) or 'deliverable'
+            (this file IS the document — e.g. an AutoCAD P&ID exported to PDF
+            that no structured section will replace).
     """
     def body(db, me):
         doc = _doc(db, me, document_id)
+        if kind not in ("reference", "deliverable"):
+            raise ValueError("kind must be 'reference' or 'deliverable'")
         data = _b64.b64decode(content_base64)
         if len(data) > 15 * 1024 * 1024:
             raise ValueError("Attachment too large (max 15 MB)")
         a = Attachment(document_id=document_id, filename=filename,
                        content_type=content_type, size_bytes=len(data),
-                       data=data, uploaded_by=me.email)
+                       data=data, uploaded_by=me.email, kind=kind)
         db.add(a)
         svc.log(db, document=doc, actor_email=me.email, actor_kind="assistant",
-                action="attach", payload={"filename": filename})
+                action="attach", payload={"filename": filename, "kind": kind})
         db.commit()
         return {"ok": True, "attachment_id": a.id, "size_bytes": len(data)}
+    return _run(body)
+
+
+@mcp.tool()
+def download_attachment(document_id: int, attachment_id: int) -> str:
+    """Read an attachment's bytes, base64-encoded (max 4 MB through MCP —
+    bigger files: open the document in the web UI). Use this to extract
+    information from an uploaded original — e.g. a P&ID PDF drawn in AutoCAD
+    and attached as the document's deliverable: save it locally, read it, then
+    fill the downstream documents from what it contains.
+
+    Args:
+        document_id: The document the file is attached to.
+        attachment_id: The attachment (from list_attachments).
+    """
+    def body(db, me):
+        _doc(db, me, document_id)
+        a = db.get(Attachment, attachment_id)
+        if not a or a.document_id != document_id:
+            raise ValueError("Attachment not found")
+        if (a.size_bytes or 0) > 4 * 1024 * 1024:
+            raise ValueError(f"Attachment is {a.size_bytes} bytes — too large for MCP "
+                             "(max 4 MB); download it from the web editor instead")
+        return {"filename": a.filename, "content_type": a.content_type,
+                "size_bytes": a.size_bytes, "kind": a.kind or "reference",
+                "content_base64": _b64.b64encode(a.data).decode()}
+    return _run(body)
+
+
+@mcp.tool()
+def set_document_skill(template_version_id: int, node_key: str, skill: str) -> str:
+    """Write the SKILL of a document type — the recipe for producing that
+    document: which upstream documents to pull from, what to take from each,
+    the granularity expected, which tools/apps to use. Works on PUBLISHED
+    versions too (template owners only): refining a skill is guidance, not a
+    structural change, and immediately applies to every project on that
+    version.
+
+    Args:
+        template_version_id: The template version (from list_templates or a
+            document's project).
+        node_key: The document type's key within that version (e.g. "sel").
+        skill: The full skill text (replaces the previous one). Markdown
+            welcome; write it like instructions to the engineer/assistant who
+            will produce the document.
+    """
+    def body(db, me):
+        tv = db.get(TemplateVersion, template_version_id)
+        if not tv:
+            raise ValueError("Template version not found")
+        svc.require_template_access(db, tv.template_id, me, need_owner=True)
+        node = next((n for n in tv.nodes if n.node_key == node_key), None)
+        if not node:
+            raise ValueError(f"No document type '{node_key}' in this version — "
+                             "valid keys: " + ", ".join(n.node_key for n in tv.nodes))
+        node.skill = skill
+        db.commit()
+        return {"ok": True, "node_key": node_key, "skill_chars": len(skill)}
+    return _run(body)
+
+
+@mcp.tool()
+def delete_template(template_id: int) -> str:
+    """Delete a whole workflow template (all its versions). Refused while any
+    project instantiates one of its versions. DESTRUCTIVE — always confirm
+    with the user before calling this.
+
+    Args:
+        template_id: The template to delete (from list_templates).
+    """
+    def body(db, me):
+        svc.require_template_access(db, template_id, me, need_owner=True)
+        t = db.get(WorkflowTemplate, template_id)
+        version_ids = [v.id for v in t.versions]
+        blocking = (db.query(Project)
+                    .filter(Project.template_version_id.in_(version_ids)).all()
+                    if version_ids else [])
+        if blocking:
+            raise ValueError(f"{len(blocking)} project(s) use this template "
+                             f"({', '.join(p.name for p in blocking[:5])}) — delete them first")
+        db.query(TemplateOwner).filter_by(template_id=template_id).delete()
+        from models import TemplateUser as _TU
+        db.query(_TU).filter_by(template_id=template_id).delete()
+        name = t.name
+        db.delete(t)
+        db.commit()
+        return {"ok": True, "deleted": name}
     return _run(body)
 
 
@@ -718,7 +831,7 @@ def new_template_version(template_id: int) -> str:
             node = DocumentTypeNode(
                 template_version_id=tv.id, node_key=n.node_key, name=n.name,
                 description=n.description, content_schema=n.content_schema,
-                author_role=n.author_role, reviewer_role=n.reviewer_role,
+                skill=n.skill, author_role=n.author_role, reviewer_role=n.reviewer_role,
                 receiver_roles=n.receiver_roles)
             db.add(node)
             db.flush()

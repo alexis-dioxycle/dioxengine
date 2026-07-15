@@ -6,7 +6,7 @@ import { api } from '../utils/api';
    published versions are frozen (create a new version to change them). */
 
 const EMPTY_NODE = () => ({
-  node_key: '', name: '', description: '', author_role: '', reviewer_role: '',
+  node_key: '', name: '', description: '', skill: '', author_role: '', reviewer_role: '',
   receiver_roles: [], content_schema: { sections: [] },
 });
 
@@ -24,7 +24,8 @@ export default function TemplateEditor({ tvid, me }) {
     setTv(d);
     const keyOf = Object.fromEntries(d.nodes.map(n => [n.id, n.node_key]));
     setNodes(d.nodes.map(n => ({
-      node_key: n.node_key, name: n.name, description: n.description,
+      id: n.id, node_key: n.node_key, name: n.name, description: n.description,
+      skill: n.skill || '',
       author_role: n.author_role, reviewer_role: n.reviewer_role,
       receiver_roles: n.receiver_roles || [],
       content_schema: n.content_schema?.sections ? n.content_schema : { sections: [] },
@@ -155,7 +156,9 @@ export default function TemplateEditor({ tvid, me }) {
         {/* node detail */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           {node ? (
-            <NodeForm node={node} editable={editable} onChange={patchNode} onSections={patchSections} />
+            <NodeForm key={node.id ?? sel} node={node} editable={editable} onChange={patchNode} onSections={patchSections}
+                      publishedOwner={!editable && tv.is_owner && tv.status === 'published'}
+                      onErr={setErr} onMsg={m => { setMsg(m); setTimeout(() => setMsg(''), 2500); }} />
           ) : (
             <div className="card" style={{ padding: 30, textAlign: 'center' }} >
               <span className="soft">No document types yet — add one on the left.</span>
@@ -300,8 +303,20 @@ function Field({ label, children }) {
   return <div><label className="lbl">{label}</label>{children}</div>;
 }
 
-function NodeForm({ node, editable, onChange, onSections }) {
+function NodeForm({ node, editable, onChange, onSections, publishedOwner, onErr, onMsg }) {
   const sections = node.content_schema.sections || [];
+  // Skills stay editable after publication (owner only): refining how a
+  // document is produced is guidance, not a structural change.
+  const skillEditable = editable || publishedOwner;
+  const [skillDirty, setSkillDirty] = useState(false);
+
+  async function saveSkill() {
+    try {
+      await api.put(`api/template-nodes/${node.id}/skill`, { skill: node.skill || '' });
+      setSkillDirty(false);
+      onMsg?.('Skill saved.');
+    } catch (e) { onErr?.(e.message); }
+  }
 
   function patchSection(i, patch) {
     onSections(sections.map((s, x) => (x === i ? { ...s, ...patch } : s)));
@@ -335,6 +350,28 @@ function NodeForm({ node, editable, onChange, onSections }) {
           <input className="input" value={node.reviewer_role} readOnly={!editable}
                  placeholder="ex: Director of Engineering" onChange={e => onChange({ reviewer_role: e.target.value })} />
         </Field>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <label className="lbl">Skill — how this document is produced</label>
+          {publishedOwner && skillDirty && (
+            <button className="btn sm" onClick={saveSkill}>Save skill</button>
+          )}
+        </div>
+        <textarea className="input" rows={Math.min(14, Math.max(4, (node.skill || '').split('\n').length + 1))}
+                  style={{ font: '400 12.5px var(--font-mono)', lineHeight: 1.5 }}
+                  value={node.skill || ''} readOnly={!skillEditable}
+                  placeholder={'Instructions for whoever (or Claude) produces this document:\n· which upstream documents to read, and what to take from each\n· expected granularity, conventions, units\n· tools/apps to use for the deterministic parts'}
+                  onChange={e => {
+                    onChange({ skill: e.target.value });
+                    if (publishedOwner) setSkillDirty(true);
+                  }} />
+        {publishedOwner && (
+          <div className="muted small" style={{ marginTop: 4 }}>
+            This version is published, but skills stay editable — changes apply immediately to every project on it.
+          </div>
+        )}
       </div>
 
       <h2 className="subtitle" style={{ margin: '4px 0 8px' }}>Sections</h2>

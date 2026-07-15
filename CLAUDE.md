@@ -87,10 +87,11 @@ DATABASE_URL, run the lifecycle. See git log for the exact commands used.
 
 Three layers, three cadences:
 
-1. **Content/structure** (documents, templates, projects, comments) — no
-   deploy ever. Through the web UI or the 23 MCP tools (Claude can build
+1. **Content/structure** (documents, templates, projects, comments, skills) —
+   no deploy ever. Through the web UI or the 26 MCP tools (Claude can build
    whole workflows: create_template → update_template_graph →
-   publish_template → create_project).
+   publish_template → create_project; write per-document skills with
+   set_document_skill — allowed on published versions).
 2. **App code** (this repo) — the `.zip` loop:
    ```bash
    npm run build          # sanity-check the frontend compiles
@@ -116,20 +117,48 @@ the app's MCP_API_KEY portal secret, acting user via `X-Dioxengine-User`.
 Configured in Alexis's `~/.claude.json` for this project dir. The pip panel
 (base/requirements.txt) now includes mcp/openpyxl/python-docx.
 
-## Status (2026-07-15 evening) & next steps
+## Domain additions (2026-07-15, post-call with Bastien)
+
+- **Skills per document** (`document_type_nodes.skill`, migration 003): each
+  document type carries its production recipe — which upstream documents to
+  pull from, what to take from each, granularity, tools. Decision from the
+  call: the skill lives ON the document node, not on the edges. Editable in
+  the template editor AND on published versions (owner only — guidance, not
+  structure): REST `PUT /api/template-nodes/{nid}/skill`, MCP
+  `set_document_skill(template_version_id, node_key, skill)`. Exposed in
+  get_document (web + MCP) and as a read-only collapsible panel in the
+  document editor.
+- **Uploaded deliverables** (`attachments.kind`, migration 003): an
+  attachment can be flagged 'deliverable' = this file IS the document (the
+  P&ID-from-AutoCAD case; Claude never generates it, engineers upload it).
+  ★ toggle in the editor, auto-previewed; `upload_attachment(kind=…)`,
+  `download_attachment` (≤4 MB, base64) so Claude can read it and fill
+  downstream documents; `get_upstream_content` lists upstream attachments.
+- **PFD visualization**: `frontend/src/components/FlowDiagram.jsx` — any
+  table with from/to columns (streams, cables, I/O) renders as a process
+  diagram: equipment typing from tags/service words (pump, exchanger,
+  vessel, reactor…) with ISO-flavored glyphs, parallel streams fanned out,
+  recycle loops routed below, wheel zoom + drag pan + fit, hover highlights
+  the connected streams, row tooltip, SVG export. Literal colors on purpose
+  (exported SVG must be self-contained).
+- **Deleting workflows**: `DELETE /api/templates/{tid}` + MCP
+  `delete_template` — owner only, 409 while any project instantiates any
+  version. Project delete button on the project page (creator only). ORM
+  cascade added for attachments (Postgres already cascades via FK).
+
+## Status (2026-07-15) & next steps
 
 - LIVE: app + MCP chain end-to-end; prod project "BOS 5000F2PBOS" (id 2)
   carries the real 5000F2PBOS data (26 equipment rows, datasheet register,
   HEXONIC + Alfa Laval offers, factual comparison, 2 open Claude comments).
-- PENDING: the version with docx/xlsx exports, live PFD diagram,
-  attachments, comment anchoring, graph template editor is packaged but
-  blocked by a review false positive (fixed in dioxycle-apps — needs portal
-  redeploy) → then re-upload the zip.
+- PENDING upload: zip with everything above (26 MCP tools, migration 003) —
+  after the portal redeploy that fixes the review false positive.
 - THEN (one MCP pass): publish W1 template v2 (streams section), recreate
-  the project with data + streams, attach reference PDFs.
+  the project with data + streams, attach reference PDFs, and write the
+  first real skills with Bastien (he wants to iterate on them himself).
 - PARALLEL: SharePoint Entra registration (Sites.Selected application-only,
-  Graph Explorer grant; no redirect URI) — admin todo sent; target site TBD
-  with Bastien.
+  Graph Explorer grant; no redirect URI) — Bastien is granting the app on
+  the Engineering site ("Pass to Folk"); tenant ID + secret received.
 - NEXT: per-type Dioxycle Word templates (port April's narrative_to_docx),
-  workflow-2 generation in anger (narrative → CLD register + CEM via
-  get_upstream_content), demo to Raphaël.
+  workflow-2 generation in anger, a dummy pressure-drop app on the portal to
+  exercise skills-calling-apps, demo to Raphaël.

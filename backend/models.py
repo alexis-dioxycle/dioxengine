@@ -75,6 +75,10 @@ class DocumentTypeNode(Base):
     description = Column(Text, default="")
     # {"sections": [{key, title, type: "text"|"table", columns?: [{key,label,type}]}]}
     content_schema = Column(JSON, default=dict)
+    # How this document is produced: upstream documents to pull from, what to
+    # take from each, granularity, tools to use. Editable even after the
+    # version is published (guidance, not structure).
+    skill = Column(Text, default="")
     author_role = Column(String, default="")
     reviewer_role = Column(String, default="")
     receiver_roles = Column(JSON, default=list)
@@ -143,6 +147,9 @@ class Document(Base):
     comments = relationship("Comment", back_populates="document",
                             cascade="all, delete-orphan",
                             order_by="Comment.id")
+    # Postgres cascades this via FK; the ORM relationship keeps SQLite dev
+    # (no FK enforcement) consistent when a project/document is deleted.
+    attachments = relationship("Attachment", cascade="all, delete-orphan")
 
 
 class DocumentVersion(Base):
@@ -195,6 +202,9 @@ class Attachment(Base):
     document_id = Column(Integer, ForeignKey("documents.id"), nullable=False)
     filename = Column(String, nullable=False)
     content_type = Column(String, default="application/octet-stream")
+    # 'reference' (supporting original) or 'deliverable' (this file IS the
+    # document — e.g. an AutoCAD P&ID that no structured section replaces).
+    kind = Column(String, default="reference")
     size_bytes = Column(Integer, default=0)
     data = deferred(Column(LargeBinary, nullable=False))
     uploaded_by = Column(String, default="")

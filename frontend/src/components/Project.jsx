@@ -23,9 +23,19 @@ export default function ProjectPage({ id, me }) {
             {p.template_name} · v{p.template_version}{p.description ? ` — ${p.description}` : ''}
           </p>
         </div>
-        <button className="btn" onClick={() => setShowMembers(true)}>
-          Members <span className="muted">({p.members.length})</span>
-        </button>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn" onClick={() => setShowMembers(true)}>
+            Members <span className="muted">({p.members.length})</span>
+          </button>
+          {p.can_manage_members && (
+            <button className="btn danger" title="Delete this project and all its documents"
+                    onClick={async () => {
+                      if (!window.confirm(`Delete the project “${p.name}” and ALL its documents?\nThis cannot be undone.`)) return;
+                      try { await api.del(`api/projects/${p.id}`); window.location.hash = '#/'; }
+                      catch (e) { setErr(e.message); }
+                    }}>Delete</button>
+          )}
+        </div>
       </div>
 
       <div className="card dag-box">

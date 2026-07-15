@@ -19,6 +19,14 @@ export default function Home({ me }) {
     catch (e) { setErr(e.message); }
   }
 
+  async function deleteTemplate(e, t) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!window.confirm(`Delete the workflow template “${t.name}” (all its versions)?\nThis is refused if projects still use it.`)) return;
+    try { await api.del(`api/templates/${t.id}`); load(); }
+    catch (err) { setErr(err.message); }
+  }
+
   async function newTemplate() {
     const name = window.prompt('Template name (e.g. "BOS Full Workflow"):');
     if (!name) return;
@@ -102,6 +110,10 @@ export default function Home({ me }) {
                   v{v.version_number} {v.status}
                 </span>
               ))}
+              {t.is_owner && (
+                <button className="icon-btn" title="Delete this template (all versions)"
+                        onClick={e => deleteTemplate(e, t)}>✕</button>
+              )}
             </a>
           );
         })}

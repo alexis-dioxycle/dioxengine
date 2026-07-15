@@ -90,6 +90,7 @@ class NodeSpec(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str = ""
     content_schema: dict = Field(default_factory=lambda: {"sections": []})
+    skill: str = ""
     author_role: str = ""
     reviewer_role: str = ""
     receiver_roles: list[str] = Field(default_factory=list)
@@ -174,6 +175,7 @@ def _tv_public(tv: TemplateVersion) -> dict:
 def _node_public(n: DocumentTypeNode) -> dict:
     return {"id": n.id, "node_key": n.node_key, "name": n.name,
             "description": n.description, "content_schema": n.content_schema,
+            "skill": n.skill or "",
             "author_role": n.author_role, "reviewer_role": n.reviewer_role,
             "receiver_roles": n.receiver_roles or []}
 
@@ -226,7 +228,7 @@ def new_template_version(template_id: int, user: DioxycleUser = Depends(track_us
         node = DocumentTypeNode(
             template_version_id=tv.id, node_key=n.node_key, name=n.name,
             description=n.description, content_schema=n.content_schema,
-            author_role=n.author_role, reviewer_role=n.reviewer_role,
+            skill=n.skill, author_role=n.author_role, reviewer_role=n.reviewer_role,
             receiver_roles=n.receiver_roles)
         db.add(node)
         db.flush()
@@ -312,6 +314,48 @@ def delete_template_version(tvid: int, user: DioxycleUser = Depends(track_user),
     db.flush()
     if not template.versions:
         db.delete(template)
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/templates/{tid}")
+def delete_template(tid: int, user: DioxycleUser = Depends(track_user),
+                    db: Session = Depends(get_db)):
+    """Delete a whole workflow template (all versions). Refused while any
+    project instantiates one of its versions — delete those projects first."""
+    svc.require_template_access(db, tid, user, need_owner=True)
+    t = db.get(WorkflowTemplate, tid)
+    version_ids = [v.id for v in t.versions]
+    blocking = (db.query(Project)
+                .filter(Project.template_version_id.in_(version_ids)).all()
+                if version_ids else [])
+    if blocking:
+        names = ", ".join(p.name for p in blocking[:5])
+        raise HTTPException(409, f"{len(blocking)} project(s) use this template ({names}"
+                                 + ("…" if len(blocking) > 5 else "") + ") — delete them first")
+    db.query(TemplateOwner).filter_by(template_id=tid).delete()
+    db.query(TemplateUser).filter_by(template_id=tid).delete()
+    db.delete(t)
+    db.commit()
+    return {"ok": True}
+
+
+class SkillUpdate(BaseModel):
+    skill: str = ""
+
+
+@app.put("/api/template-nodes/{nid}/skill")
+def set_node_skill(nid: int, body: SkillUpdate,
+                   user: DioxycleUser = Depends(track_user),
+                   db: Session = Depends(get_db)):
+    """Update a document type's skill. Allowed on PUBLISHED versions too:
+    refining how a document is produced is guidance, not a structural change,
+    and immediately benefits every project on that version."""
+    n = db.get(DocumentTypeNode, nid)
+    if not n:
+        raise HTTPException(404, "Document type not found")
+    svc.require_template_access(db, n.template_version.template_id, user, need_owner=True)
+    n.skill = body.skill
     db.commit()
     return {"ok": True}
 
@@ -455,6 +499,7 @@ def get_document(did: int, user: DioxycleUser = Depends(track_user),
         **svc.document_summary(db, doc),
         "project_id": doc.project_id, "project_name": doc.project.name,
         "content_schema": doc.node.content_schema,
+        "skill": doc.node.skill or "",
         "can_edit": svc.can_act(doc.author_email, user),
         "can_review": svc.can_act(doc.reviewer_email, user),
         "latest_content": (head.content if head else {}) or {},
@@ -591,6 +636,7 @@ MAX_ATTACHMENT_MB = 15
 def _attachment_public(a: Attachment) -> dict:
     return {"id": a.id, "filename": a.filename, "content_type": a.content_type,
             "size_bytes": a.size_bytes, "uploaded_by": a.uploaded_by,
+            "kind": a.kind or "reference",
             "created_at": a.created_at.isoformat() if a.created_at else None}
 
 
@@ -604,6 +650,7 @@ def list_attachments(did: int, user: DioxycleUser = Depends(track_user),
 
 @app.post("/api/documents/{did}/attachments")
 async def upload_attachment(did: int, file: UploadFile = File(...),
+                            kind: str = Query("reference", pattern=r"^(reference|deliverable)$"),
                             user: DioxycleUser = Depends(track_user),
                             db: Session = Depends(get_db)):
     doc = svc.get_document_or_404(db, did, user)
@@ -612,10 +659,31 @@ async def upload_attachment(did: int, file: UploadFile = File(...),
         raise HTTPException(413, f"Attachment too large (max {MAX_ATTACHMENT_MB} MB)")
     a = Attachment(document_id=did, filename=file.filename or "file",
                    content_type=file.content_type or "application/octet-stream",
-                   size_bytes=len(data), data=data, uploaded_by=user.email)
+                   size_bytes=len(data), data=data, uploaded_by=user.email, kind=kind)
     db.add(a)
     svc.log(db, document=doc, actor_email=user.email, actor_kind="user",
-            action="attach", payload={"filename": a.filename})
+            action="attach", payload={"filename": a.filename, "kind": kind})
+    db.commit()
+    return _attachment_public(a)
+
+
+class AttachmentUpdate(BaseModel):
+    kind: str = Field(pattern=r"^(reference|deliverable)$")
+
+
+@app.put("/api/documents/{did}/attachments/{aid}")
+def update_attachment(did: int, aid: int, body: AttachmentUpdate,
+                      user: DioxycleUser = Depends(track_user),
+                      db: Session = Depends(get_db)):
+    """Toggle an attachment between 'reference' (supporting original) and
+    'deliverable' (this file IS the document — the PNID case)."""
+    doc = svc.get_document_or_404(db, did, user)
+    a = db.get(Attachment, aid)
+    if not a or a.document_id != did:
+        raise HTTPException(404, "Attachment not found")
+    a.kind = body.kind
+    svc.log(db, document=doc, actor_email=user.email, actor_kind="user",
+            action="attach_kind", payload={"filename": a.filename, "kind": body.kind})
     db.commit()
     return _attachment_public(a)
 
